@@ -31,7 +31,12 @@ jobs:
     # Must stay above the worst case in factory.config.json: waiting for a worker,
     # setup, two agent runs and two rounds of checks. scripts/check-setup.mjs
     # does the sum. A run that hits this limit skips its cleanup.
-    timeout-minutes: 150
+    # check-setup.mjs sums the worst case (wait 20 + 3 x command 25 + 2 x agent 30
+    # = 155) and demands 10 minutes of margin, so this must be >= 165. Lowering it
+    # instead would mean shrinking the per-command budget KingAgent's npm ci and
+    # full suite actually need — and a run killed by this limit skips its cleanup
+    # and leaves the worker marked busy, which costs more than the minutes saved.
+    timeout-minutes: 170
     env:
       FACTORY_REPO: ${{ github.event.client_payload.repo || inputs.repo }}
       FACTORY_ISSUE: ${{ github.event.client_payload.issue || inputs.issue }}
