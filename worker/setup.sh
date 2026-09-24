@@ -2,7 +2,7 @@
 # Defines what goes into the worker image. scripts/build-snapshot.mjs runs this
 # inside a Box and then takes a snapshot of the result.
 #
-# Three of these four lines are not optional for this factory, and each one is
+# Three of these lines are not optional for this factory, and each one is
 # here because something in the app repos needed it — the build log is the only
 # record of why:
 #
@@ -14,7 +14,6 @@
 #             is exactly why the repo's own CI does `apt-get install -y zsh` on
 #             Ubuntu before it runs the suite.
 #   opencode  not in the stock Box.
-#   pi        not in the stock Box.
 #
 # Facts about a Box: Debian 12 on ARM64, user "boxuser" with passwordless sudo,
 # Node, git, Claude Code and Codex already installed.
@@ -37,7 +36,6 @@ PROFILE
 # ARM64 matters: a CLI without a linux-arm64 build cannot be installed here at
 # all, and the smoke test is what proves it before a worker is provisioned.
 sudo npm install --global --silent opencode-ai
-sudo npm install --global --silent @mariozechner/pi-coding-agent
 
 # --- Check -------------------------------------------------------------------
 # The build must fail when something is missing, so every tool a worker relies
@@ -49,6 +47,5 @@ zsh --version
 claude --version
 codex --version
 opencode --version
-pi --version
 # Both app repos declare engines.node, so prove the major they ask for:
 node -e "const major=Number(process.versions.node.split('.')[0]); if (major < 24) { console.error('Node ' + process.versions.node + ' is too old for the app repos'); process.exit(1); } console.log('node major ' + major + ' ok')"

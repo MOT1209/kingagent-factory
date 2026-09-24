@@ -24,7 +24,7 @@ then it is a local `git init` with one commit.
 | `browser` | `true` | Upstash runs the Chromium. Free in the plan, and fixed at Box creation. |
 | `agentTimeoutMinutes` | 30 | KingAgent is a large codebase: reading it is most of the work. |
 | `commandTimeoutMinutes` | 25 | `npm ci` for an Electron repo plus the full suite plus lint. |
-| `boxSettings` | `[]` for claude and pi | The owner chose each CLI's own default model and effort. The empty list is the record of that choice, not an oversight. |
+| `boxSettings` | `[]` for claude | The owner chose each CLI's own default model and effort. The empty list is the record of that choice, not an oversight. |
 
 ## The repos, and why their commands are what they are
 
@@ -66,14 +66,14 @@ when that matters.
 
 ## The worker image is mandatory, not optional
 
-`worker/setup.sh` installs Node 24, zsh, OpenCode and Pi. Each line is there
+`worker/setup.sh` installs Node 24, zsh and OpenCode. Each line is there
 because something needed it:
 
 - **Node 24** — KingAgent declares `engines.node >= 24.0.0`.
 - **zsh** — three test files exercise zsh-backed behaviour, which is why the
   repo's CI installs zsh on Ubuntu before running the suite. Without it in the
   image, every KingAgent job fails its checks and the agent gets sent in circles.
-- **OpenCode and Pi** — neither is in the stock Box.
+- **OpenCode** — not in the stock Box.
 
 ## Not verified yet, on purpose
 
@@ -81,12 +81,10 @@ because something needed it:
   `opencode auth login` file into the Box. If OpenCode Zen turns out to need no
   credential at all, that block is dead weight carrying a secret, and the smoke
   test will say so. Delete it rather than leave it.
-- **Where `~` is for OpenCode and Pi.** Claude and Codex are documented as
-  living under `/workspace/home`; the OpenCode and Pi paths here are a guess
-  from each project's own docs (`/home/boxuser/...`, `/workspace/home/...`).
-  The smoke test is the judge, and the fix is one line in this config.
-- **Pi's sign-in.** It is BYOK, so the secret is the whole `auth.json` after
-  `/login` on a real machine. The user does that step; we never see the value.
+- **Where `~` is for OpenCode.** Claude and Codex are documented as living
+  under `/workspace/home`; the OpenCode path here is a guess from its own docs
+  (`/home/boxuser/...`). The smoke test is the judge, and the fix is one line
+  in this config.
 - **Freebuff is not a worker.** It has no API key and no account by design
   ("no keys to paste", ad-supported sessions), so there is nothing for the
   factory's `auth` contract to place in a Box. The reverse-engineered
@@ -113,7 +111,7 @@ Four secrets, all entered by the owner into `.env` and never pasted into chat:
 2. `FACTORY_GITHUB_TOKEN` — fine-grained, owner `MOT1209`, access to the factory
    repo and both app repos, with Contents / Pull requests / Issues read+write.
 3. `CLAUDE_CODE_OAUTH_TOKEN` — from `claude setup-token`, in a real terminal.
-4. `OPENCODE_AUTH_JSON` and `PI_AUTH_JSON` — the two sign-in files.
+4. `OPENCODE_AUTH_JSON` — the sign-in file `opencode auth login` writes.
 
 Then `node --env-file=.env scripts/check-setup.mjs`, which reads no secret
 values and reports which are missing.

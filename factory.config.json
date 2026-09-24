@@ -57,18 +57,6 @@
       ],
       "promptExtra": "When you are done, write your summary to the file {summary}, and nothing else to that file.",
       "command": "opencode run \"$(cat {prompt})\""
-    },
-    "pi": {
-      "description": "Pi (pi.dev), BYOK. Print mode is its headless mode and auto-approves, so nobody has to answer a prompt in a Box. The secret is the content of ~/.pi/agent/auth.json after `/login`; UNVERIFIED until the smoke test whether the Box's home is /workspace/home or /home/boxuser for pi, and adjust the path if not.",
-      "auth": [
-        {
-          "secret": "PI_AUTH_JSON",
-          "file": "/workspace/home/.pi/agent/auth.json",
-          "localFile": "~/.pi/agent/auth.json"
-        }
-      ],
-      "boxSettings": [],
-      "command": "pi -p \"$(cat {prompt})\" > {summary}"
     }
   },
   "repos": [
@@ -108,11 +96,6 @@
     {
       "id": "opencode-01",
       "agent": "opencode",
-      "enabled": true
-    },
-    {
-      "id": "pi-01",
-      "agent": "pi",
       "enabled": true
     }
   ]
