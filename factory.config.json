@@ -1,0 +1,119 @@
+{
+  "factory": {
+    "repo": "MOT1209/kingagent-factory",
+    "boxNamePrefix": "kaf-",
+    "boxLabel": "kingagent-fac",
+    "busyLabel": "busy",
+    "branchPrefix": "factory/issue-",
+    "gitAuthor": {
+      "name": "Rashid",
+      "email": "208480351+MOT1209@users.noreply.github.com"
+    },
+    "allowedActors": [
+      "MOT1209"
+    ],
+    "boxLimit": 10,
+    "browser": true,
+    "waitForWorkerMinutes": 20,
+    "agentTimeoutMinutes": 30,
+    "commandTimeoutMinutes": 25
+  },
+  "labels": {
+    "ready": "ready",
+    "running": "factory:running",
+    "review": "factory:review",
+    "needsAttention": "factory:needs-attention"
+  },
+  "agents": {
+    "claude": {
+      "description": "Claude Code, signed in with a Claude subscription. The token comes from `claude setup-token` and lives in .env as CLAUDE_CODE_OAUTH_TOKEN. Model and effort are the CLI's own defaults (the owner chose defaults), so boxSettings is empty on purpose.",
+      "auth": [
+        {
+          "secret": "CLAUDE_CODE_OAUTH_TOKEN",
+          "env": "CLAUDE_CODE_OAUTH_TOKEN"
+        }
+      ],
+      "boxSettings": [],
+      "command": "claude -p \"$(cat {prompt})\" --dangerously-skip-permissions --output-format text > {summary}"
+    },
+    "opencode": {
+      "description": "OpenCode on the free OpenCode Zen tier. The CLI is not in the stock Box, so worker/setup.sh installs it into the image. UNVERIFIED until the smoke test: whether Zen needs a credential at all. The auth block below copies a local `opencode auth login` into the Box the way Codex does; if the smoke test shows Zen works with no credential, delete this block rather than leave a secret that does nothing.",
+      "auth": [
+        {
+          "secret": "OPENCODE_AUTH_JSON",
+          "file": "/home/boxuser/.local/share/opencode/auth.json",
+          "localFile": "~/.local/share/opencode/auth.json"
+        }
+      ],
+      "boxSettings": [
+        {
+          "path": "/home/boxuser/.config/opencode/opencode.json",
+          "format": "json",
+          "values": {
+            "autoupdate": false,
+            "share": "disabled"
+          }
+        }
+      ],
+      "promptExtra": "When you are done, write your summary to the file {summary}, and nothing else to that file.",
+      "command": "opencode run \"$(cat {prompt})\""
+    },
+    "pi": {
+      "description": "Pi (pi.dev), BYOK. Print mode is its headless mode and auto-approves, so nobody has to answer a prompt in a Box. The secret is the content of ~/.pi/agent/auth.json after `/login`; UNVERIFIED until the smoke test whether the Box's home is /workspace/home or /home/boxuser for pi, and adjust the path if not.",
+      "auth": [
+        {
+          "secret": "PI_AUTH_JSON",
+          "file": "/workspace/home/.pi/agent/auth.json",
+          "localFile": "~/.pi/agent/auth.json"
+        }
+      ],
+      "boxSettings": [],
+      "command": "pi -p \"$(cat {prompt})\" > {summary}"
+    }
+  },
+  "repos": [
+    {
+      "repo": "MOT1209/KingAgent",
+      "baseBranch": "main",
+      "setup": [
+        "ELECTRON_SKIP_BINARY_DOWNLOAD=1 npm ci"
+      ],
+      "checks": [
+        "npm test",
+        "npm run lint",
+        "node scripts/check-syntax.mjs"
+      ],
+      "exclude": []
+    },
+    {
+      "repo": "MOT1209/rashid-hq-os",
+      "baseBranch": "main",
+      "setup": [
+        "npm ci"
+      ],
+      "checks": [
+        "npm run test",
+        "npm run lint",
+        "npm run typecheck"
+      ],
+      "exclude": []
+    }
+  ],
+  "workers": [
+    {
+      "id": "claude-01",
+      "agent": "claude",
+      "enabled": true
+    },
+    {
+      "id": "opencode-01",
+      "agent": "opencode",
+      "enabled": true
+    },
+    {
+      "id": "pi-01",
+      "agent": "pi",
+      "enabled": true
+    }
+  ]
+}
