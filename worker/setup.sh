@@ -32,6 +32,11 @@ sudo tee /etc/profile.d/node24.sh > /dev/null <<'PROFILE'
 export PATH=/usr/bin:$PATH
 PROFILE
 
+# profile.d only reaches the NEXT login shell, and the shell running this
+# script started before the file existed. So put it in front now, or the check
+# at the end proves the stock Node instead of the one just installed.
+export PATH=/usr/bin:$PATH
+
 # --- Agent CLIs the stock Box lacks ---------------------------------------
 # ARM64 matters: a CLI without a linux-arm64 build cannot be installed here at
 # all, and the smoke test is what proves it before a worker is provisioned.

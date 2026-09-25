@@ -16,7 +16,8 @@
     "browser": true,
     "waitForWorkerMinutes": 20,
     "agentTimeoutMinutes": 30,
-    "commandTimeoutMinutes": 25
+    "commandTimeoutMinutes": 25,
+    "snapshotId": "ab599155-38c6-41c2-a904-d393bcba198e"
   },
   "labels": {
     "ready": "ready",
