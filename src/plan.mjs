@@ -5,6 +5,8 @@
 import { loadConfig, findRepo } from "./config.mjs"
 import { getIssue } from "./github.mjs"
 import { getWorkerStates, pickWorker } from "./workers.mjs"
+import { missingSecrets } from "./agents.mjs"
+import { takenByAnotherRun } from "./issue-state.mjs"
 
 const [repoName = process.env.FACTORY_REPO, issueNumber = process.env.FACTORY_ISSUE] = process.argv.slice(2)
 if (!repoName || !issueNumber) {
@@ -37,6 +39,11 @@ async function main() {
     return
   }
 
+  if (takenByAnotherRun(issueLabels, config.labels)) {
+    console.log(`\nThe issue already has "${config.labels.running}", so the factory would leave it to the run that owns it.`)
+    return
+  }
+
   const states = await getWorkerStates(config)
   console.log("\nWorkers:")
   for (const w of states)
@@ -46,6 +53,13 @@ async function main() {
   if (!worker) {
     console.log("\nNo free worker right now. The factory would wait for one.")
     return
+  }
+
+  // Names only, never values. A missing one would stop the real run at once.
+  const missing = missingSecrets(config, worker.agent)
+  if (missing.length) {
+    // Not a failure here: the real run reports it on the issue, where the owner looks.
+    console.log(`\nWARNING: worker ${worker.id} would stop at once: no value for ${missing.join(", ")}. Set it with scripts/set-secrets.mjs.`)
   }
 
   console.log(`\nPlan: worker ${worker.id} (${worker.agent}) would take this issue in Box ${worker.boxName}.`)

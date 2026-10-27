@@ -44,6 +44,30 @@ export function loadConfig(file = CONFIG_FILE) {
     errors.push('factory.browser must be true or false. It gives every Box browser access, and the default is true')
   }
 
+  // Run labels start with "run-", and the claim logic treats any such label as
+  // another run's. The busy label must never look like one.
+  if (/^run-/.test(config.factory.busyLabel ?? "")) errors.push(`factory.busyLabel "${config.factory.busyLabel}" must not start with "run-"`)
+  if (config.factory.boxLabel && config.factory.boxLabel === config.factory.busyLabel) errors.push("factory.boxLabel and factory.busyLabel must differ")
+
+  // The branch is <branchPrefix><issue number>, pushed to the app repo.
+  if (!/^[A-Za-z0-9._/-]+$/.test(config.factory.branchPrefix ?? "") || /(^[/.]|\.\.|\/\/|\.lock\/|@\{)/.test(config.factory.branchPrefix ?? "")) {
+    errors.push(`factory.branchPrefix "${config.factory.branchPrefix}" must be a plain git branch prefix such as "factory/issue-"`)
+  }
+  if (!config.factory.boxNamePrefix || !/^[a-z0-9-]+$/.test(config.factory.boxNamePrefix)) errors.push(`factory.boxNamePrefix "${config.factory.boxNamePrefix}" must be lowercase letters, digits and dashes`)
+
+  for (const key of ["waitForWorkerMinutes", "agentTimeoutMinutes", "commandTimeoutMinutes", "imageBuildTimeoutMinutes", "boxLimit"]) {
+    const value = config.factory[key]
+    if (value !== undefined && !(Number.isFinite(value) && value > 0)) errors.push(`factory.${key} must be a positive number`)
+  }
+
+  // The four issue labels drive every state change, so each must be set and
+  // none may double as another.
+  const labelValues = ["ready", "running", "review", "needsAttention"].map((key) => {
+    if (typeof config.labels[key] !== "string" || !config.labels[key].trim()) errors.push(`labels.${key} must be a label name`)
+    return config.labels[key]
+  })
+  if (new Set(labelValues).size !== labelValues.length) errors.push("labels.ready, running, review and needsAttention must all be different")
+
   for (const [name, agent] of Object.entries(config.agents)) {
     // Box labels are at most 20 characters, and each Box gets "agent-<name>".
     if (!/^[a-z0-9-]{1,14}$/.test(name)) errors.push(`agent name "${name}" must be 1-14 lowercase letters, digits or dashes`)
@@ -99,7 +123,10 @@ export function loadConfig(file = CONFIG_FILE) {
     workerIds.add(worker.id)
     if (!config.agents[worker.agent]) errors.push(`worker "${worker.id}" uses unknown agent "${worker.agent}"`)
     worker.enabled ??= true
+    if (typeof worker.enabled !== "boolean") errors.push(`worker "${worker.id}": enabled must be true or false`)
   }
+  if (!config.workers.some((w) => w.enabled)) errors.push("no worker is enabled, so no issue could ever be picked up")
+  if (!config.repos.length) errors.push("repos is empty, so every issue would be ignored")
 
   if (errors.length) throw new Error(`factory.config.json:\n  - ${errors.join("\n  - ")}`)
   return config
