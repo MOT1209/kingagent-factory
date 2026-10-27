@@ -58,7 +58,7 @@ export function fakeBox({ id, name, labels = [], status = "paused" }) {
 const tick = () => new Promise((resolve) => setImmediate(resolve))
 
 // Records label changes on an issue and keeps its current label set.
-export function fakeGithub(initial = []) {
+export function fakeGithub(initial = [], comments = []) {
   const issue = { labels: new Set(initial), comments: [] }
   return {
     issue,
@@ -66,5 +66,6 @@ export function fakeGithub(initial = []) {
     addLabels: async (_repo, _n, labels) => labels.forEach((l) => issue.labels.add(l)),
     removeLabel: async (_repo, _n, label) => void issue.labels.delete(label),
     comment: async (_repo, _n, body) => void issue.comments.push(body),
+    listComments: async () => [...comments, ...issue.comments.map((body) => ({ author: "MOT1209", body: `${body}\n<!-- software-factory -->` }))],
   }
 }

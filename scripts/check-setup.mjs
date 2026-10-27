@@ -2,13 +2,14 @@
 // secret: tools, the config, which secrets have a value, whether the GitHub
 // token reaches every repo, and whether the Box key works.
 //
-// Run with: node --env-file=.env scripts/check-setup.mjs
+// Run with: node --env-file=.env scripts/check-setup.mjs [--probe-writes]
 import { spawnSync } from "node:child_process"
 import { readFileSync } from "node:fs"
 import { Box } from "@upstash/box"
 import { loadConfig, usedAgents } from "../src/config.mjs"
 import { readSecret } from "../src/agents.mjs"
 import { describeBoxSettings } from "../src/box.mjs"
+import { hintFor } from "../src/github.mjs"
 
 let problems = 0
 const ok = (text) => console.log(`  ok    ${text}`)
@@ -45,14 +46,56 @@ if (config) {
 
   console.log("\nGitHub token")
   const token = process.env.FACTORY_GITHUB_TOKEN
+  // Tells the four ways a call can fail apart: no answer at all, a bad token,
+  // a missing permission, and a repo the token cannot see.
+  const call = async (path, init = {}) => {
+    try {
+      const response = await fetch(`https://api.github.com${path}`, { ...init, headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28" } })
+      return { status: response.status, text: await response.text() }
+    } catch (error) {
+      return { status: 0, text: `network error: ${error.cause?.code ?? error.message}` }
+    }
+  }
+  const explain = ({ status, text }) => (status === 0 ? `${text}. Check the network or GitHub's status page` : `HTTP ${status}. ${hintFor(status, text)}`)
+
+  if (token) {
+    const me = await call("/user")
+    if (me.status === 200) ok(`the token works and belongs to ${JSON.parse(me.text).login}`)
+    else if (me.status === 401) bad(`the token is not accepted: ${explain(me)}`)
+    else if (me.status === 0) bad(`GitHub could not be reached: ${explain(me)}`)
+    else note(`GET /user answered ${me.status}. Fine-grained tokens can be refused there; the repo checks below are what count`)
+  }
   for (const repo of [config.factory.repo, ...config.repos.map((r) => r.repo)]) {
     if (!token) break
-    const response = await fetch(`https://api.github.com/repos/${repo}`, { headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json" } })
-    if (response.ok) ok(`${repo} is reachable`)
-    else bad(`${repo}: HTTP ${response.status}. The token cannot see this repo. A fine-grained token covers ONE owner, so the factory repo and the app repos need the same owner, and an organisation may have to approve the token first`)
+    const response = await call(`/repos/${repo}`)
+    // The workflow's one-run-per-issue rule compares names as written, so the
+    // config must spell each repo the way GitHub does.
+    const fullName = response.status === 200 ? JSON.parse(response.text).full_name : null
+    if (fullName && fullName !== repo) bad(`${repo} is spelled "${fullName}" on GitHub. Use that spelling in factory.config.json`)
+    else if (fullName) ok(`${repo} is reachable`)
+    else bad(`${repo}: ${explain(response)} A fine-grained token covers ONE owner, so the factory repo and the app repos need the same owner, and an organisation may have to approve the token first`)
   }
-  note("Reachable is not proof of write access. The first dispatch and the first push are the real test.")
   note("The token needs, on the factory repo AND every app repo: Contents read/write (pushing branches, and the trigger's repository_dispatch), Issues read/write, Pull requests read/write. Metadata read comes with them.")
+
+  // Fine-grained tokens cannot list their own permissions, and reachable is not
+  // writable. These probes send write requests that GitHub must refuse as
+  // invalid (an empty label name, an empty pull request, a malformed ref), so
+  // nothing is created. GitHub checks permission before it checks the request,
+  // so 422 means "allowed" and 403 means "missing permission". The dispatch to
+  // the factory repo is real but names an event nothing listens to.
+  if (token && process.argv.includes("--probe-writes")) {
+    console.log("\nWrite permissions (probes, nothing is created)")
+    const verdict = (what, r, allowed) => (allowed.includes(r.status) ? ok(`${what}: allowed`) : bad(`${what}: ${explain(r)}`))
+    verdict(`${config.factory.repo} Contents write (repository_dispatch)`, await call(`/repos/${config.factory.repo}/dispatches`, { method: "POST", body: JSON.stringify({ event_type: "factory-permission-probe" }) }), [204])
+    for (const { repo } of config.repos) {
+      verdict(`${repo} Issues write`, await call(`/repos/${repo}/labels`, { method: "POST", body: JSON.stringify({ name: "" }) }), [422])
+      verdict(`${repo} Pull requests write`, await call(`/repos/${repo}/pulls`, { method: "POST", body: JSON.stringify({}) }), [422])
+      verdict(`${repo} Contents write`, await call(`/repos/${repo}/git/refs`, { method: "POST", body: JSON.stringify({ ref: "refs/heads/factory-probe", sha: "0000000000000000000000000000000000000000" }) }), [422])
+    }
+    note("A probe proves the permission for the token, not the trigger's secret in the app repo. The first dry run through GitHub proves that.")
+  } else if (token) {
+    note("Reachable is not proof of write access. Add --probe-writes to test the write permissions without creating anything.")
+  }
 
   console.log("\nTriggers in the app repos")
   if (!token) note("skipped: FACTORY_GITHUB_TOKEN has no value")
@@ -60,14 +103,16 @@ if (config) {
     if (!token) break
     // No ref: GitHub only runs an issues workflow from the default branch, and
     // that is the branch the contents API reads without one.
-    const response = await fetch(`https://api.github.com/repos/${repo}/contents/.github/workflows/factory-ready.yml`, { headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json" } })
-    if (response.ok) ok(`${repo} has the trigger on its default branch. It also needs the FACTORY_GITHUB_TOKEN secret, which this script cannot see`)
-    else if (response.status === 404) bad(`${repo} has no .github/workflows/factory-ready.yml on its default branch, so labelling an issue there starts nothing. Run: node scripts/install-trigger.mjs --yes`)
-    else bad(`${repo}: could not read the trigger (HTTP ${response.status})`)
+    const response = await call(`/repos/${repo}/contents/.github/workflows/factory-ready.yml`)
+    if (response.status === 200) ok(`${repo} has the trigger on its default branch. It also needs the FACTORY_GITHUB_TOKEN secret, which this script cannot see`)
+    else if (response.status === 404) bad(`${repo} has no .github/workflows/factory-ready.yml on its default branch (or the token cannot read it), so labelling an issue there starts nothing. Run: node scripts/install-trigger.mjs --yes`)
+    else bad(`${repo}: could not read the trigger: ${explain(response)}`)
   }
 
   console.log("\nUpstash Box")
-  try {
+  // A missing key is already reported above. Only a key that is set can be wrong.
+  if (!process.env.UPSTASH_BOX_API_KEY) note("skipped: UPSTASH_BOX_API_KEY has no value")
+  else try {
     const boxes = await Box.list()
     ok(`the Box key works. ${boxes.length} Boxes on the account`)
 
@@ -94,7 +139,7 @@ if (config) {
       note(`This factory wants ${wanted} worker Boxes and ${foreign.length} other Boxes are on the account. Set factory.boxLimit to the plan's Box limit and this check does the sum. Paused Boxes count`)
     }
   } catch (error) {
-    bad(`the Box key does not work: ${error.message}`)
+    bad(`the Box key was refused, or Upstash could not be reached: ${error.message}`)
   }
 
   console.log("\nTimeouts")

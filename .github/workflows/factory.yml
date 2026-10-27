@@ -14,8 +14,10 @@ on:
         description: Issue number
         required: true
 
+# actions: read lets the stale-worker sweep ask whether a run is still going.
 permissions:
   contents: read
+  actions: read
 
 # One run per issue at a time. A second run for the same issue waits, then
 # finds the ready label gone and stops.
@@ -49,6 +51,16 @@ jobs:
       # No secrets in this step's environment: dependency install scripts must
       # never see the tokens.
       - run: npm ci
+      # Frees workers whose runs GitHub says are finished but never cleaned up.
+      # It never touches a claim whose run is still queued or running.
+      - name: Free workers left by finished runs
+        if: vars.FACTORY_DRY_RUN != 'true'
+        timeout-minutes: 5
+        env:
+          UPSTASH_BOX_API_KEY: ${{ secrets.UPSTASH_BOX_API_KEY }}
+          FACTORY_GITHUB_TOKEN: ${{ secrets.FACTORY_GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/reap-stale.mjs
       - name: Show the plan
         env:
           UPSTASH_BOX_API_KEY: ${{ secrets.UPSTASH_BOX_API_KEY }}

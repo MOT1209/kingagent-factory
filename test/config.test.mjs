@@ -58,3 +58,24 @@ test("collects every problem in one message", () => {
   assert.match(message, /run-/)
   assert.match(message, /agentTimeoutMinutes/)
 })
+
+test("missing agent secrets are named, never shown", async () => {
+  const { missingSecrets } = await import("../src/agents.mjs")
+  const config = load()
+  const saved = { c: process.env.CLAUDE_CODE_OAUTH_TOKEN, j: process.env.FACTORY_SECRETS_JSON }
+  delete process.env.CLAUDE_CODE_OAUTH_TOKEN
+  process.env.FACTORY_SECRETS_JSON = "{}"
+  assert.deepEqual(missingSecrets(config, "claude"), ["CLAUDE_CODE_OAUTH_TOKEN"])
+  process.env.FACTORY_SECRETS_JSON = JSON.stringify({ CLAUDE_CODE_OAUTH_TOKEN: "from-actions" })
+  assert.deepEqual(missingSecrets(config, "claude"), [], "the Actions secrets blob counts")
+  if (saved.c !== undefined) process.env.CLAUDE_CODE_OAUTH_TOKEN = saved.c
+  if (saved.j === undefined) delete process.env.FACTORY_SECRETS_JSON
+  else process.env.FACTORY_SECRETS_JSON = saved.j
+})
+
+test("rejects wrong types for workers and repo lists", () => {
+  assert.match(loadError((c) => (c.workers[0].enabled = "yes")), /enabled must be true or false/)
+  assert.match(loadError((c) => (c.repos = [])), /repos is empty/)
+  assert.match(loadError((c) => delete c.repos[0].baseBranch), /needs a baseBranch/)
+  assert.match(loadError((c) => c.repos.push({ ...c.repos[0] })), /listed twice/)
+})

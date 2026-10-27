@@ -6,7 +6,7 @@
 // By hand: node --env-file=.env scripts/recover-run.mjs <run id> [owner/repo issue]
 import { Box } from "@upstash/box"
 import { loadConfig, findRepo } from "../src/config.mjs"
-import { getIssue, addLabels, removeLabel, comment } from "../src/github.mjs"
+import { getIssue, listComments, addLabels, removeLabel, comment } from "../src/github.mjs"
 import { recoverRun } from "../src/recover.mjs"
 
 const [runId = process.env.GITHUB_RUN_ID, repoName = process.env.FACTORY_REPO, issueNumber = process.env.FACTORY_ISSUE] = process.argv.slice(2)
@@ -20,7 +20,7 @@ try {
   await recoverRun(config, runId, {
     listBoxes: () => Box.list({ label: config.factory.boxLabel }),
     getBox: (id) => Box.get(id),
-    api: { getIssue, addLabels, removeLabel, comment },
+    api: { getIssue, listComments, addLabels, removeLabel, comment },
     issue: repo && issueNumber ? { repo: repo.repo, number: issueNumber } : null,
     runUrl,
   })
