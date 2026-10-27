@@ -65,7 +65,12 @@ jobs:
         env:
           UPSTASH_BOX_API_KEY: ${{ secrets.UPSTASH_BOX_API_KEY }}
           FACTORY_GITHUB_TOKEN: ${{ secrets.FACTORY_GITHUB_TOKEN }}
-          FACTORY_SECRETS_JSON: ${{ toJSON(secrets) }}
+          # The agents' sign-in secrets, by name. A new agent type or repo secret
+          # in factory.config.json needs its line here too: test/workflow.test.mjs
+          # fails until it is added, and a run without it stops with a comment
+          # naming the missing secret.
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          OPENCODE_AUTH_JSON: ${{ secrets.OPENCODE_AUTH_JSON }}
         run: node src/plan.mjs
       # Set the repo variable FACTORY_DRY_RUN to true to stop after the plan. Useful
       # while proving the trigger, before any agent is allowed to run.
@@ -75,9 +80,12 @@ jobs:
         env:
           UPSTASH_BOX_API_KEY: ${{ secrets.UPSTASH_BOX_API_KEY }}
           FACTORY_GITHUB_TOKEN: ${{ secrets.FACTORY_GITHUB_TOKEN }}
-          # Every secret as one JSON blob. The agents' sign-in secrets are read from
-          # it by name, so adding an agent never means editing this file.
-          FACTORY_SECRETS_JSON: ${{ toJSON(secrets) }}
+          # The agents' sign-in secrets, by name. A new agent type or repo secret
+          # in factory.config.json needs its line here too: test/workflow.test.mjs
+          # fails until it is added, and a run without it stops with a comment
+          # naming the missing secret.
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          OPENCODE_AUTH_JSON: ${{ secrets.OPENCODE_AUTH_JSON }}
         run: node src/run.mjs
       # Runs when the work step failed, timed out or was cancelled. It only acts on
       # a Box that still carries this run's label, so after a clean failure (which

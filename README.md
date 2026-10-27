@@ -130,8 +130,9 @@ The smoke test uses a little of the agent's quota.
 - **Add an agent type:**
   1. Describe it under `agents`: sign-in secrets under `auth`, and a `command` that contains `{prompt}` and `{summary}`.
   2. Install its CLI in [worker/setup.sh](worker/setup.sh).
-  3. Rebuild the image with `scripts/build-snapshot.mjs`.
-  4. Smoke-test it.
+  3. Add a line `<SECRET>: ${{ secrets.<SECRET> }}` for each of its secrets to the "Show the plan" and "Do the work" steps of `.github/workflows/factory.yml`. The workflow passes secrets by name, not as one blob, and `test/workflow.test.mjs` fails until the lines are there.
+  4. Rebuild the image with `scripts/build-snapshot.mjs`.
+  5. Smoke-test it.
 
 Both agent types share one worker image (`factory.snapshotId`).
 
