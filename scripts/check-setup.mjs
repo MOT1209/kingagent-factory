@@ -52,6 +52,19 @@ if (config) {
     else bad(`${repo}: HTTP ${response.status}. The token cannot see this repo. A fine-grained token covers ONE owner, so the factory repo and the app repos need the same owner, and an organisation may have to approve the token first`)
   }
   note("Reachable is not proof of write access. The first dispatch and the first push are the real test.")
+  note("The token needs, on the factory repo AND every app repo: Contents read/write (pushing branches, and the trigger's repository_dispatch), Issues read/write, Pull requests read/write. Metadata read comes with them.")
+
+  console.log("\nTriggers in the app repos")
+  if (!token) note("skipped: FACTORY_GITHUB_TOKEN has no value")
+  for (const { repo } of config.repos) {
+    if (!token) break
+    // No ref: GitHub only runs an issues workflow from the default branch, and
+    // that is the branch the contents API reads without one.
+    const response = await fetch(`https://api.github.com/repos/${repo}/contents/.github/workflows/factory-ready.yml`, { headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json" } })
+    if (response.ok) ok(`${repo} has the trigger on its default branch. It also needs the FACTORY_GITHUB_TOKEN secret, which this script cannot see`)
+    else if (response.status === 404) bad(`${repo} has no .github/workflows/factory-ready.yml on its default branch, so labelling an issue there starts nothing. Run: node scripts/install-trigger.mjs --yes`)
+    else bad(`${repo}: could not read the trigger (HTTP ${response.status})`)
+  }
 
   console.log("\nUpstash Box")
   try {
@@ -89,7 +102,9 @@ if (config) {
   const worst = (f.waitForWorkerMinutes ?? 30) + 3 * (f.commandTimeoutMinutes ?? 20) + 2 * (f.agentTimeoutMinutes ?? 25)
   let workflowLimit = null
   try {
-    workflowLimit = Number(/timeout-minutes:\s*(\d+)/.exec(readFileSync(new URL("../.github/workflows/factory.yml", import.meta.url), "utf8"))?.[1])
+    // The tightest limit counts: the work step's own, which sits below the job's.
+    const limits = [...readFileSync(new URL("../.github/workflows/factory.yml", import.meta.url), "utf8").matchAll(/timeout-minutes:\s*(\d+)/g)].map((m) => Number(m[1])).filter((n) => n > 10)
+    workflowLimit = limits.length ? Math.min(...limits) : null
   } catch {}
   const sum = `worst case for one run: wait ${f.waitForWorkerMinutes ?? 30} + setup and two rounds of checks 3 x ${f.commandTimeoutMinutes ?? 20} + two agent runs 2 x ${f.agentTimeoutMinutes ?? 25} = ${worst} min`
   if (!workflowLimit) note(`${sum}. Could not read timeout-minutes from the workflow`)

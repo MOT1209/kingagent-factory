@@ -32,6 +32,23 @@ export function readSecret(entry) {
   return file && existsSync(file) ? readFileSync(file, "utf8") : undefined
 }
 
+// The names of the secrets an agent type needs that have no value here. Checked
+// before a worker is claimed, so a missing sign-in fails in seconds instead of
+// after the repo setup has run.
+export const missingSecrets = (config, agentName) => (config.agents[agentName]?.auth ?? []).filter((entry) => !readSecret(entry)).map((entry) => entry.secret)
+
+// Every secret value this process can see, for masking them in comments and
+// logs. Includes the whole Actions secrets blob, so a repo's test secret is
+// masked too.
+export function secretValues(config) {
+  const entries = [{ secret: "FACTORY_GITHUB_TOKEN" }, { secret: "UPSTASH_BOX_API_KEY" }, ...Object.values(config.agents).flatMap((a) => a.auth ?? []), ...config.repos.flatMap((r) => r.secrets ?? [])]
+  const values = entries.map(readSecret)
+  try {
+    values.push(...Object.values(JSON.parse(process.env.FACTORY_SECRETS_JSON ?? "{}")))
+  } catch {}
+  return values.filter((v) => typeof v === "string")
+}
+
 // Every path the factory writes secrets to, so they can be removed again.
 export function secretPaths(config) {
   const files = Object.values(config.agents).flatMap((a) => (a.auth ?? []).filter((x) => x.file).map((x) => x.file))

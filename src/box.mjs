@@ -184,43 +184,65 @@ export const imageFor = (config, agentName) => config.agents[agentName].snapshot
 // Waits for a free worker, then marks its Box busy. Two factory runs can start
 // at the same moment and pick the same worker, so each run also adds its own
 // run label. If two run labels show up, the higher one backs off.
-export async function claimWorker(config, issueLabels, runId) {
-  const runLabel = `run-${runId}`.slice(0, 20)
+//
+// `deps` exists for the tests, which race claimers against in-memory Boxes.
+export const runLabelFor = (runId) => `run-${runId}`.slice(0, 20)
+
+const defaultDeps = {
+  getStates: getWorkerStates,
+  getBox: (id) => Box.get(id, { timeout: BOX_TIMEOUT_MS }),
+  createBox: createWorkerBox,
+  sleep,
+  log: console.log,
+}
+
+export async function claimWorker(config, issueLabels, runId, deps = {}) {
+  const { getStates, getBox, createBox, sleep: wait, log } = { ...defaultDeps, ...deps }
+  const runLabel = runLabelFor(runId)
   const deadline = Date.now() + (config.factory.waitForWorkerMinutes ?? 30) * 60 * 1000
 
   for (let attempt = 0; Date.now() < deadline; attempt++) {
     const spread = Number(String(runId).replace(/\D/g, "").slice(-6)) + attempt
-    const worker = pickWorker(await getWorkerStates(config), issueLabels, spread, config.agents)
+    const worker = pickWorker(await getStates(config), issueLabels, spread, config.agents)
     if (!worker) {
-      console.log("No free worker. Checking again in 30 seconds.")
-      await sleep(30_000)
+      log("No free worker. Checking again in 30 seconds.")
+      await wait(30_000)
       continue
     }
 
     let box
     try {
       if (worker.boxId) {
-        box = await Box.get(worker.boxId, { timeout: BOX_TIMEOUT_MS })
+        box = await getBox(worker.boxId)
       } else {
-        console.log(`Creating Box ${worker.boxName}...`)
-        box = await createWorkerBox(config, worker)
+        log(`Creating Box ${worker.boxName}...`)
+        box = await createBox(config, worker)
+      }
+      // The worker list can be seconds old. A run that already holds this Box
+      // has added its labels by now, and a late claimer must not join it.
+      const held = (await box.labels.list()).filter((l) => l === config.factory.busyLabel || l.startsWith("run-"))
+      if (held.length) {
+        log(`Worker ${worker.id} was taken meanwhile (${held.join(", ")}). Trying another.`)
+        box = undefined
+        await wait(2_000 + Math.random() * 3_000)
+        continue
       }
       // A Box holds at most five labels, so a crowded Box can refuse the label.
       // That also means another run got there first.
       await box.labels.add(runLabel)
       await box.labels.add(config.factory.busyLabel)
     } catch (error) {
-      console.log(`Could not claim worker ${worker.id} (${error.message}). Trying another.`)
+      log(`Could not claim worker ${worker.id} (${error.message}). Trying another.`)
       await box?.labels.remove(runLabel).catch(() => {})
-      await sleep(2_000 + Math.random() * 3_000)
+      await wait(2_000 + Math.random() * 3_000)
       continue
     }
 
     // Give a rival run a moment to add its label, then look again.
-    await sleep(4_000)
+    await wait(4_000)
     const rivals = (await box.labels.list()).filter((l) => l.startsWith("run-") && l !== runLabel)
     if (rivals.some((l) => l < runLabel)) {
-      console.log(`Worker ${worker.id} was claimed by another run at the same moment. Trying another.`)
+      log(`Worker ${worker.id} was claimed by another run at the same moment. Trying another.`)
       await box.labels.remove(runLabel)
       continue
     }
