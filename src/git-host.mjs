@@ -21,8 +21,18 @@ export const remoteUrl = (repo) => `${hosting.base}${repo}.git`
 // actions/checkout does it: never in a URL, never in .git/config, and only for
 // github.com. A fresh, empty global config keeps the user's own settings
 // (credential helpers, url rewrites) out of it.
+//
+// Git also starts from a short list of the runner's variables, not all of them:
+// the Box key, the Actions secrets blob and every GIT_* override (GIT_DIR,
+// GIT_SSH_COMMAND, GIT_EXEC_PATH...) stay out of every git and tar process. The
+// proxy and CA variables are kept, since some runners cannot reach GitHub without.
+const PASS_THROUGH = /^(PATH|LANG|LC_[A-Z]+|TMPDIR|TMP|TEMP|SYSTEMROOT|COMSPEC|PATHEXT|(HTTPS?|NO|ALL)_PROXY|SSL_CERT_FILE|SSL_CERT_DIR|CURL_CA_BUNDLE|GIT_SSL_CAINFO)$/i
+export function cleanEnv(source = process.env) {
+  return Object.fromEntries(Object.entries(source).filter(([key]) => PASS_THROUGH.test(key)))
+}
+
 function gitEnv(token) {
-  const env = { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null" }
+  const env = { ...cleanEnv(), HOME: tmpdir(), GIT_TERMINAL_PROMPT: "0", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null" }
   if (token) {
     const basic = Buffer.from(`x-access-token:${token}`).toString("base64")
     Object.assign(env, { GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "http.https://github.com/.extraheader", GIT_CONFIG_VALUE_0: `AUTHORIZATION: basic ${basic}` })
@@ -33,7 +43,12 @@ function gitEnv(token) {
 function git(dir, args, { token, allowFailure = false, input } = {}) {
   const result = spawnSync("git", ["-c", "core.hooksPath=/dev/null", ...args], { cwd: dir, env: gitEnv(token), encoding: "utf8", input, maxBuffer: 64 * 1024 * 1024 })
   const output = `${result.stdout ?? ""}${result.stderr ?? ""}`.trim()
-  if (result.status !== 0 && !allowFailure) throw new Error(`git ${args[0]} failed (exit ${result.status}):\n${output.slice(-2000)}`)
+  if (result.status !== 0 && !allowFailure) {
+    // The token (and its base64 header form) never goes into a message, even if git echoes a header.
+    const hidden = token ? [token, Buffer.from(`x-access-token:${token}`).toString("base64")] : []
+    const safe = hidden.reduce((text, secret) => text.replaceAll(secret, "***"), output)
+    throw new Error(`git ${args[0]} failed (exit ${result.status}):\n${safe.slice(-2000)}`)
+  }
   return { code: result.status, output, stdout: (result.stdout ?? "").trim() }
 }
 
@@ -57,22 +72,26 @@ export function inspectBranch(dir, repo, branch, token) {
 
 // The clone as a gzipped tarball, for the Box.
 export function packRepo(dir) {
-  const file = join(mkdtempSync(join(tmpdir(), "factory-tar-")), "repo.tgz")
-  execFileSync("tar", ["-czf", file, "-C", dir, "."])
-  const bytes = readFileSync(file)
-  rmSync(file, { force: true })
-  return bytes
+  const folder = mkdtempSync(join(tmpdir(), "factory-tar-"))
+  try {
+    const file = join(folder, "repo.tgz")
+    execFileSync("tar", ["-czf", file, "-C", dir, "."], { env: cleanEnv() })
+    return readFileSync(file)
+  } finally {
+    rmSync(folder, { recursive: true, force: true })
+  }
 }
 
 // Applies the Box's patch to the clone and stages it. Returns the staged files.
 export function applyPatch(dir, patch) {
   if (!patch.length) return []
-  const file = join(mkdtempSync(join(tmpdir(), "factory-patch-")), "change.patch")
-  writeFileSync(file, patch)
+  const folder = mkdtempSync(join(tmpdir(), "factory-patch-"))
   try {
+    const file = join(folder, "change.patch")
+    writeFileSync(file, patch)
     git(dir, ["apply", "--index", "--binary", "--whitespace=nowarn", file])
   } finally {
-    rmSync(file, { force: true })
+    rmSync(folder, { recursive: true, force: true })
   }
   // --no-renames lists both sides of a rename, so moving a file out of a
   // protected folder still names the protected path.

@@ -7,12 +7,11 @@
 import { findRepo } from "./config.mjs"
 import { runMark } from "./github.mjs"
 import { sh, q, runScript, startBrowser, uploadBytes, downloadBytes } from "./box.mjs"
-import { signIn, writeJobFiles, writeRepoEnv, runAgent, secretPaths, missingSecrets, REPO_ENV_FILE } from "./agents.mjs"
+import { signIn, writeJobFiles, writeRepoEnv, runAgent, endAgentSession, scrubBox, missingSecrets, REPO_ENV_FILE, WORK_DIR } from "./agents.mjs"
 import { transitions, applyTransition, takenByAnotherRun } from "./issue-state.mjs"
 import { factoryCommitMessage, protectedPaths, trustedComments } from "./guards.mjs"
 import * as gitHost from "./git-host.mjs"
 
-const WORK_DIR = "/workspace/home/work"
 const NEEDS_CLARIFICATION = "NEEDS_CLARIFICATION:"
 // GitHub refuses pull request bodies above 65536 characters.
 const MAX_SUMMARY = 50_000
@@ -80,6 +79,10 @@ export async function runIssue({ config, repoName, issueNumber, runId, runUrl, e
   if (eventName === "workflow_dispatch" && (repoName !== repo.repo || String(issueNumber) !== String(Number(issueNumber)))) {
     throw new Error(`Write the repo and issue exactly as ${repo.repo} and ${Number(issueNumber)}, so this run queues behind any other run for the same issue.`)
   }
+
+  // The number goes into API paths. A dispatch payload is not checked by GitHub,
+  // so "1/../../x" or "1?x" must stop here, not be sent.
+  if (!/^[1-9]\d{0,9}$/.test(String(issueNumber))) throw new Error(`"${String(issueNumber).slice(0, 40)}" is not an issue number.`)
 
   const issue = await api.getIssue(repo.repo, issueNumber)
   const issueLabels = issue.labels.map((l) => l.name)
@@ -182,6 +185,7 @@ export async function runIssue({ config, repoName, issueNumber, runId, runUrl, e
     if (await startBrowser(box, config)) console.log("The Box's browser is running.")
     const timeoutMinutes = config.factory.agentTimeoutMinutes ?? 25
     let result = await runAgent(box, config, worker.agent, { workDir: repoDir, jobDir, prompt: buildPrompt(repo, issue, comments), timeoutMinutes })
+    await endAgentSession(box, config)
     console.log(`Agent finished in ${result.minutes} min with exit code ${result.code}.`)
 
     if (result.code !== 0) {
@@ -201,7 +205,9 @@ export async function runIssue({ config, repoName, issueNumber, runId, runUrl, e
     if (!checks.passed) {
       console.log(`Check failed: ${checks.command}. Giving the agent one chance to fix it.`)
       const extra = `\n# A check failed after your first attempt\n\nThe command \`${checks.command}\` failed with this output. Fix it.\n\n${checks.output.slice(-3000)}\n`
+      await signIn(box, config, worker.agent)
       result = await runAgent(box, config, worker.agent, { workDir: repoDir, jobDir, prompt: buildPrompt(repo, issue, comments, extra), timeoutMinutes })
+      await endAgentSession(box, config)
       checks = result.code === 0 ? await runCommands(box, "checks", repoDir, jobDir, repo.checks, stepMinutes) : checks
     }
     if (!checks.passed) {
@@ -249,8 +255,15 @@ export async function runIssue({ config, repoName, issueNumber, runId, runUrl, e
     if (checkout) git.cleanup(checkout.dir)
     // A paused Box keeps its disk, so sign-in files are removed after every job,
     // and so is the work folder: the app's code, the prompt, and logs and a
-    // summary that may hold whatever the agent printed.
-    await sh(box, `rm -rf ${secretPaths(config).map(q).join(" ")} ${q(WORK_DIR)} ~/.git-credentials`, { allowFailure: true }).catch(() => {})
+    // summary that may hold whatever the agent printed. The removal is checked.
+    // A Box that could not be cleaned is NOT handed to the next job: it keeps
+    // this run's claim, the run fails loudly, and the recovery step (which cleans
+    // again before it releases anything) or scripts/release-worker.mjs frees it.
+    const left = await scrubBox(box, config)
+    if (left.length) {
+      console.error(`::error::Worker ${worker.id} could not be cleaned (${left.join(", ")}). It stays claimed so the next job cannot read it.`)
+      throw new Error(`Worker ${worker.id} could not be cleaned and was not released: ${left.join(", ")}`)
+    }
     await releaseWorker(config, claim)
   }
 }

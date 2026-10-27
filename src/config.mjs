@@ -38,6 +38,14 @@ export function loadConfig(file = CONFIG_FILE) {
     errors.push("factory.allowedActors needs the real GitHub usernames that may start the factory")
   }
 
+  // These names go into API calls and comparisons. Anything that is not a plain
+  // GitHub username is a typo, or an attempt at something else ("*", "a/b").
+  const actors = Array.isArray(config.factory.allowedActors) ? config.factory.allowedActors : []
+  for (const actor of actors) {
+    if (typeof actor !== "string" || !/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/.test(actor)) errors.push(`factory.allowedActors entry ${JSON.stringify(actor)} is not a GitHub username`)
+  }
+  if (new Set(actors.map((a) => String(a).toLowerCase())).size !== actors.length) errors.push("factory.allowedActors lists a user twice (GitHub usernames ignore case)")
+
   // Left out means true. Browser access is fixed when a Box is created, so the
   // default is the choice that never forces anyone to delete Boxes later.
   if (config.factory.browser !== undefined && typeof config.factory.browser !== "boolean") {
@@ -102,12 +110,18 @@ export function loadConfig(file = CONFIG_FILE) {
     }
   }
 
+  // GitHub ignores case in repo names, so "A/b" and "a/B" are one repo. Two
+  // entries for it would get two workflow slots for the same issue.
   const repoNames = new Set()
   for (const repo of config.repos) {
-    if (!/^[^/\s]+\/[^/\s]+$/.test(repo.repo ?? "") || /^OWNER\//.test(repo.repo ?? "")) errors.push(`repo "${repo.repo}" must be a real owner/name`)
-    if (repoNames.has(repo.repo)) errors.push(`repo "${repo.repo}" is listed twice`)
-    repoNames.add(repo.repo)
+    if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repo.repo ?? "") || /^OWNER\//.test(repo.repo ?? "")) errors.push(`repo "${repo.repo}" must be a real owner/name`)
+    if (repoNames.has(String(repo.repo).toLowerCase())) errors.push(`repo "${repo.repo}" is listed twice (GitHub ignores case in repo names)`)
+    repoNames.add(String(repo.repo).toLowerCase())
     if (!repo.baseBranch) errors.push(`repo "${repo.repo}" needs a baseBranch`)
+    else if (!/^[A-Za-z0-9._/-]+$/.test(repo.baseBranch) || /(^[-/.]|\.\.|\/\/|\.lock$|\/$)/.test(repo.baseBranch)) errors.push(`repo "${repo.repo}": baseBranch "${repo.baseBranch}" is not a plain branch name`)
+    for (const key of ["setup", "checks", "exclude"]) {
+      if (repo[key] !== undefined && (!Array.isArray(repo[key]) || repo[key].some((c) => typeof c !== "string" || !c.trim()))) errors.push(`repo "${repo.repo}": ${key} must be a list of non-empty strings`)
+    }
     repo.setup ??= []
     repo.checks ??= []
     repo.exclude ??= []
@@ -124,6 +138,9 @@ export function loadConfig(file = CONFIG_FILE) {
     if (!config.agents[worker.agent]) errors.push(`worker "${worker.id}" uses unknown agent "${worker.agent}"`)
     worker.enabled ??= true
     if (typeof worker.enabled !== "boolean") errors.push(`worker "${worker.id}": enabled must be true or false`)
+  }
+  if (config.factory.boxLimit !== undefined && config.workers.length > config.factory.boxLimit) {
+    errors.push(`${config.workers.length} workers need ${config.workers.length} Boxes, but factory.boxLimit is ${config.factory.boxLimit}`)
   }
   if (!config.workers.some((w) => w.enabled)) errors.push("no worker is enabled, so no issue could ever be picked up")
   if (!config.repos.length) errors.push("repos is empty, so every issue would be ignored")

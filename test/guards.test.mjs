@@ -21,6 +21,11 @@ test(".github changes are caught", () => {
   assert.deepEqual(protectedPaths(["src/a.js", ".github/workflows/ci.yml", "docs/.github.md"]), [".github/workflows/ci.yml"])
 })
 
+test("CODEOWNERS, odd-case .github and .git paths are protected too", () => {
+  const all = [".GitHub/workflows/x.yml", "CODEOWNERS", "docs/CODEOWNERS", "codeowners", "sub/.git/hooks/pre-commit", ".git/config", "src/CODEOWNERS.md", ".gitignore", ".gitattributes", "docs/.github.md", "src/a.js"]
+  assert.deepEqual(protectedPaths(all), [".GitHub/workflows/x.yml", "CODEOWNERS", "docs/CODEOWNERS", "codeowners", "sub/.git/hooks/pre-commit", ".git/config"])
+})
+
 test("only allowed actors' comments reach the agent", () => {
   const comments = [
     { author: "MOT1209", body: "use the blue one" },

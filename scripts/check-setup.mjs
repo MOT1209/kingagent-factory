@@ -50,10 +50,10 @@ if (config) {
   // a missing permission, and a repo the token cannot see.
   const call = async (path, init = {}) => {
     try {
-      const response = await fetch(`https://api.github.com${path}`, { ...init, headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28" } })
+      const response = await fetch(`https://api.github.com${path}`, { ...init, headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28" }, signal: AbortSignal.timeout(30_000) })
       return { status: response.status, text: await response.text() }
     } catch (error) {
-      return { status: 0, text: `network error: ${error.cause?.code ?? error.message}` }
+      return { status: 0, text: `${error.name === "TimeoutError" ? "no answer within 30 s" : "network error"}: ${error.cause?.code ?? error.message}` }
     }
   }
   const explain = ({ status, text }) => (status === 0 ? `${text}. Check the network or GitHub's status page` : `HTTP ${status}. ${hintFor(status, text)}`)

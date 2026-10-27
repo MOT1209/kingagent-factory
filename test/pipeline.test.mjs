@@ -327,7 +327,7 @@ test("a missing agent secret stops the run before any work", async () => {
   assert.equal(await s.run(), "needs-attention")
   assert.match(lastComment(s.api), /CLAUDE_CODE_OAUTH_TOKEN/)
   assert.deepEqual(factoryLabels(s.api), ["factory:needs-attention"])
-  assert.deepEqual(s.box.commands.filter((c) => !c.startsWith("( rm -rf")), [], "nothing but the cleanup ran in the Box")
+  assert.deepEqual(s.box.commands.filter((c) => !/^\( (rm -rf|ls -d|for p in \/proc)/.test(c)), [], "nothing but the cleanup ran in the Box")
   assert.ok(s.released.length === 1)
 })
 
@@ -386,4 +386,80 @@ test("manual runs: outsiders are refused, and names must be spelled exactly", as
 test("a repo that is not in the config is refused", async () => {
   const s = setup()
   await assert.rejects(s.run({ repoName: "someone/else" }), /not in factory.config.json/)
+})
+
+// --- hardening: issue numbers, sign-in lifetime, leftovers, verified cleanup ---
+const alive = (pid) => {
+  try {
+    return !/^\d+ \(.*\) Z/.test(readFileSync(`/proc/${pid}/stat`, "utf8"))
+  } catch {
+    return false
+  }
+}
+
+test("an issue number that is not a plain number never reaches the API", async () => {
+  const s = setup()
+  for (const bad of ["7/../../orgs", "7?x=1", "-1", "0", "07", "7 ", "", "1e3", "99999999999"]) {
+    await assert.rejects(s.run({ issueNumber: bad }), /not an issue number/, JSON.stringify(bad))
+  }
+  assert.equal(s.api.issueReads, 0)
+  assert.equal(s.box.labelSet.has("busy"), false)
+})
+
+test("the agent's sign-in is gone before the repo's checks run", async () => {
+  const s = setup({ checks: ['test ! -e "$HOME/.factory/env"', "grep -q hello README.md"] })
+  assert.equal(await s.run(), "review")
+})
+
+test("the agent's repo-secrets file stays for the checks, the sign-in does not", async () => {
+  const s = setup({ checks: ['test -z "$CLAUDE_CODE_OAUTH_TOKEN"', "grep -q hello README.md"] })
+  assert.equal(await s.run(), "review")
+})
+
+test("after a failed check the agent is signed in again for its second try, and out again after", async () => {
+  const agent = `[ -n "$CLAUDE_CODE_OAUTH_TOKEN" ] || exit 5; if [ -e "$HOME/first-done" ]; then printf 'second\\n' >> README.md; else touch "$HOME/first-done"; printf 'hello\\n' >> README.md; fi; echo done > {summary}`
+  const s = setup({ agent, checks: ["grep -q second README.md", 'test ! -e "$HOME/.factory/env"'] })
+  assert.equal(await s.run(), "review")
+  assertReleasedAndClean(s)
+})
+
+test("a process the agent detached into its own session is killed when the agent ends", async () => {
+  const s = setup({ agent: `setsid sh -c 'sleep 300' & echo $! > "$HOME/leftover.pid"; sleep 0.3; echo ok > {summary}`, checks: [] })
+  const outcome = await s.run()
+  const pid = Number(readFileSync(join(s.box.home, "leftover.pid"), "utf8"))
+  try {
+    assert.ok(pid > 1)
+    assert.equal(alive(pid), false, "the leftover process is dead")
+  } finally {
+    if (alive(pid)) process.kill(pid, "SIGKILL")
+  }
+  assert.ok(["review", "needs-attention"].includes(outcome))
+})
+
+test("a Box that cannot be cleaned is not handed on: the run fails loudly and keeps the claim", async () => {
+  const s = setup()
+  const real = s.box.exec.command
+  // The final cleanup silently does nothing (a stuck mount, a read-only disk).
+  s.box.exec.command = async (command) => (command.includes("rm -rf") && command.includes("opencode/auth.json") ? { status: "completed", result: "__EXIT__0" } : real(command))
+  await assert.rejects(s.run(), /could not be cleaned and was not released/)
+  assert.ok(s.box.labelSet.has(runLabelFor("1001")), "the run label stays, so no other run can claim this Box")
+  assert.equal(s.released.length, 0)
+})
+
+test("a cleanup that cannot even be checked counts as not clean", async () => {
+  const s = setup()
+  const real = s.box.exec.command
+  s.box.exec.command = async (command) => {
+    if (command.startsWith("( ls -d")) throw new Error("connection reset")
+    return real(command)
+  }
+  await assert.rejects(s.run(), /could not be cleaned/)
+  assert.ok(s.box.labelSet.has(runLabelFor("1001")))
+})
+
+test("a summary file of gigabytes is read only up to a cap", async () => {
+  const s = setup({ agent: `printf 'hello\\n' >> README.md; head -c 3000000 /dev/zero | tr '\\0' y > {summary}`, checks: [] })
+  assert.equal(await s.run(), "review")
+  assert.ok(s.api.prs[0].body.length < 60_000)
+  assert.ok(s.box.commands.some((c) => c.includes("head -c 200000")))
 })

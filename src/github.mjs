@@ -23,10 +23,24 @@ export function ownerRun(comments) {
 // Tests swap in a fake fetch and a sleep that does not wait.
 export const transport = { fetch: (...args) => fetch(...args), sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)) }
 
+// Seconds a single request may take before it is given up on. A hung
+// connection would otherwise hold the whole workflow until its own timeout.
+export const REQUEST_TIMEOUT_MS = 30_000
+
+// Anything that looks like a token is cut out of text before it can reach a
+// log, an issue comment or a thrown message. GitHub does not echo the caller's
+// token, but a proxy or an error page might.
+const TOKEN_SHAPE = /\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})\b/g
+export const scrub = (text, token = process.env.FACTORY_GITHUB_TOKEN) => {
+  let out = String(text ?? "").replace(TOKEN_SHAPE, "***")
+  if (token && token.length >= 8) out = out.replaceAll(token, "***")
+  return out
+}
+
 // A GitHub error with the status, and a sentence on what usually causes it.
 export class GitHubError extends Error {
   constructor(method, path, status, text) {
-    super(`GitHub ${method} ${path} failed: ${status} ${String(text).slice(0, 500)}\n${hintFor(status, text)}`)
+    super(`GitHub ${method} ${path} failed: ${status} ${scrub(text).slice(0, 500)}\n${hintFor(status, text)}`)
     this.status = status
   }
 }
@@ -49,8 +63,28 @@ export function isTransient(status, text = "", headers = new Map()) {
   return status === 403 && (/secondary rate limit|rate limit exceeded/i.test(text) || headers.get?.("x-ratelimit-remaining") === "0")
 }
 
+// How long to wait before the next try: Retry-After (seconds or a date), then
+// the rate-limit reset time, then exponential backoff. Jitter keeps runs that
+// failed together from retrying together. Never more than a minute.
+export function retryDelayMs(attempt, headers = new Map(), now = Date.now(), random = Math.random()) {
+  const retryAfter = headers.get?.("retry-after")
+  let wait = Number(retryAfter) * 1000
+  if (!Number.isFinite(wait) && retryAfter) wait = Date.parse(retryAfter) - now
+  if (!(wait > 0) && headers.get?.("x-ratelimit-remaining") === "0") wait = Number(headers.get?.("x-ratelimit-reset")) * 1000 - now
+  if (!(wait > 0)) wait = 2000 * 2 ** (attempt - 1)
+  return Math.min(Math.round(wait + random * 1000), 60_000)
+}
+
+// A 5xx or a dropped connection says nothing about whether GitHub applied the
+// write. Repeating a GET, PUT, PATCH or DELETE is harmless; repeating a POST can
+// post a comment or open a pull request twice. A rate limit (429 or a 403 that
+// says so) is refused before GitHub does anything, so it is safe for every method.
+// `idempotent` lets a caller vouch for a POST (adding labels is one).
+const rejectedBeforeProcessing = (status) => status === 429 || status === 403
+const safeToRepeat = (method, idempotent) => idempotent || method !== "POST"
+
 // `token` overrides FACTORY_GITHUB_TOKEN, for the workflow's own GITHUB_TOKEN.
-export async function github(path, { method = "GET", body, token = process.env.FACTORY_GITHUB_TOKEN } = {}) {
+export async function github(path, { method = "GET", body, token = process.env.FACTORY_GITHUB_TOKEN, idempotent = false } = {}) {
   if (!token) throw new Error("FACTORY_GITHUB_TOKEN is not set")
 
   for (let attempt = 1; ; attempt++) {
@@ -64,22 +98,25 @@ export async function github(path, { method = "GET", body, token = process.env.F
           "X-GitHub-Api-Version": "2022-11-28",
         },
         body: body ? JSON.stringify(body) : undefined,
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       })
     } catch (error) {
-      // A network failure. GET is always safe to repeat; a write is only
-      // repeated when it never reached GitHub.
-      if (attempt < 3 && (method === "GET" || /ECONNREFUSED|ENOTFOUND|EAI_AGAIN/.test(String(error.cause?.code ?? error.message)))) {
-        await transport.sleep(1000 * attempt)
+      // A network failure. A request that never connected is always safe to
+      // repeat. After a reset or a timeout the write may have landed, so only
+      // calls that are harmless to repeat go again.
+      const code = String(error.cause?.code ?? error.message)
+      const neverSent = /ECONNREFUSED|ENOTFOUND|EAI_AGAIN/.test(code)
+      if (attempt < 3 && (neverSent || safeToRepeat(method, idempotent))) {
+        await transport.sleep(retryDelayMs(attempt))
         continue
       }
-      throw new Error(`GitHub ${method} ${path} could not be reached: ${error.message}`)
+      throw new Error(`GitHub ${method} ${path} could not be reached${neverSent || error.name !== "TimeoutError" ? "" : " (timed out)"}: ${scrub(error.message, token)}`)
     }
     if (response.ok) return response.status === 204 ? null : response.json()
 
     const text = await response.text()
-    if (attempt < 3 && isTransient(response.status, text, response.headers)) {
-      const wait = Number(response.headers.get?.("retry-after")) * 1000 || 2000 * attempt
-      await transport.sleep(Math.min(wait, 60_000))
+    if (attempt < 3 && isTransient(response.status, text, response.headers) && (rejectedBeforeProcessing(response.status) || safeToRepeat(method, idempotent))) {
+      await transport.sleep(retryDelayMs(attempt, response.headers))
       continue
     }
     throw new GitHubError(method, path, response.status, text)
@@ -89,7 +126,7 @@ export async function github(path, { method = "GET", body, token = process.env.F
 export const getIssue = (repo, number) => github(`/repos/${repo}/issues/${number}`)
 
 export const addLabels = (repo, number, labels) =>
-  github(`/repos/${repo}/issues/${number}/labels`, { method: "POST", body: { labels } })
+  github(`/repos/${repo}/issues/${number}/labels`, { method: "POST", body: { labels }, idempotent: true })
 
 export async function removeLabel(repo, number, label) {
   try {
@@ -105,14 +142,34 @@ export const comment = (repo, number, body) =>
 ${FACTORY_MARK}` } })
 
 // Opens a pull request, or updates the open one for the same branch, so a
-// retried run never opens a second one.
+// retried run never opens a second one. An open pull request is only reused when
+// it really is this repo's branch into the expected base: a request for another
+// base, or from a fork's branch of the same name, is somebody else's work.
 export async function openPullRequest(repo, { head, base, title, body }) {
   const owner = repo.split("/")[0]
-  const existing = await github(`/repos/${repo}/pulls?state=open&head=${owner}:${encodeURIComponent(head)}`)
-  if (existing.length > 0) {
-    return github(`/repos/${repo}/pulls/${existing[0].number}`, { method: "PATCH", body: { title, body } })
+  const findOpen = async () => {
+    const open = await github(`/repos/${repo}/pulls?state=open&head=${owner}:${encodeURIComponent(head)}`)
+    return open.find((pr) => (pr.head?.repo?.full_name ?? repo).toLowerCase() === repo.toLowerCase() && (pr.head?.ref ?? head) === head)
   }
-  return github(`/repos/${repo}/pulls`, { method: "POST", body: { head, base, title, body } })
+  const reuse = async (existing) => {
+    if ((existing.base?.ref ?? base) !== base) {
+      throw new Error(`Pull request #${existing.number} in ${repo} is open for branch ${head} but targets ${existing.base.ref}, not ${base}. It was left alone; close it and add the ready label again.`)
+    }
+    return github(`/repos/${repo}/pulls/${existing.number}`, { method: "PATCH", body: { title, body } })
+  }
+  const existing = await findOpen()
+  if (existing) return reuse(existing)
+  try {
+    return await github(`/repos/${repo}/pulls`, { method: "POST", body: { head, base, title, body } })
+  } catch (error) {
+    // A 422 can mean a pull request for this branch appeared since the lookup
+    // (a retried run, or a person). Take that one instead of failing.
+    if (error.status === 422) {
+      const raced = await findOpen()
+      if (raced) return reuse(raced)
+    }
+    throw error
+  }
 }
 
 // Every comment on the issue, oldest first, up to the first 100.
