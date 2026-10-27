@@ -97,3 +97,22 @@ test("reaper skips the run it is part of", async () => {
   const report = await reapStale(config, { listBoxes: async () => [asListed(mine)], getBox: async () => assert.fail("must not open"), getRun: async () => assert.fail("must not look up"), api: fakeGithub([]), currentRunId: "3000", log: quiet })
   assert.deepEqual(report, { recovered: [], live: [], unknown: [] })
 })
+
+test("recovery that cannot clean the Box leaves it claimed and says what to do", async () => {
+  const box = held("570")
+  const realCommand = box.exec.command
+  const logs = []
+  // `ls` still finds the last job's work folder after the removal.
+  box.exec.command = async (command) => (command.startsWith("( ls -d") ? { status: "completed", result: "/workspace/home/work\n__EXIT__0" } : realCommand(command))
+  const gh = fakeGithub([config.labels.running], [pickedUpBy("570")])
+  const result = await recoverRun(config, "570", { listBoxes: async () => [asListed(box)], getBox: async () => box, api: gh, issue, log: (m) => logs.push(m) })
+  assert.deepEqual(result.released, [])
+  assert.ok(box.labelSet.has(runLabelFor("570")) && box.labelSet.has(config.factory.busyLabel), "still claimed")
+  assert.match(logs.join("\n"), /stays claimed.*release-worker/)
+})
+
+test("recovery also removes the work folder, not just the sign-in files", async () => {
+  const box = held("571")
+  await recoverRun(config, "571", { listBoxes: async () => [asListed(box)], getBox: async () => box, api: fakeGithub(), issue: null, log: quiet })
+  assert.ok(box.commands.some((c) => c.includes("rm -rf") && c.includes("'/workspace/home/work'")))
+})

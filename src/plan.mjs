@@ -68,4 +68,12 @@ async function main() {
   console.log("\nDry run only. Nothing was changed.")
 }
 
-await main()
+// A missing key or a refused call is an answer for the operator, not a crash.
+// The message names the cause and never holds a secret (github.mjs scrubs it).
+try {
+  await main()
+} catch (error) {
+  console.error(`\nPlan failed: ${error.message}`)
+  if (/UPSTASH|apiKey|api key|Unauthorized/i.test(error.message)) console.error("Check UPSTASH_BOX_API_KEY (scripts/check-setup.mjs tells a missing key from a refused one).")
+  process.exitCode = 1
+}

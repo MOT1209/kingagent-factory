@@ -11,7 +11,14 @@ export const isFactoryCommit = (message) => new RegExp(`^${FACTORY_TRAILER} \\S+
 
 // Paths the agent is told not to touch. The factory checks the staged change
 // against them instead of trusting the agent to obey.
-const PROTECTED = [/^\.github\//]
+//   .github/          workflows and the settings that decide who may merge. Matched
+//                     case-insensitively, so a checkout on a case-insensitive disk
+//                     cannot be steered into it with ".GitHub/".
+//   CODEOWNERS        at the root or in docs/, where GitHub also looks for it: it
+//                     decides whose review a change needs.
+//   .git anywhere     git's own folder. git apply refuses it already; this is the
+//                     second lock on the same door.
+const PROTECTED = [/^\.github\//i, /^(docs\/)?CODEOWNERS$/i, /(^|\/)\.git(\/|$)/i]
 export const protectedPaths = (files) => files.filter((file) => PROTECTED.some((pattern) => pattern.test(file)))
 
 // Replaces every known secret value in a text with ***. Values shorter than 8

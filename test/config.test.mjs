@@ -79,3 +79,24 @@ test("rejects wrong types for workers and repo lists", () => {
   assert.match(loadError((c) => delete c.repos[0].baseBranch), /needs a baseBranch/)
   assert.match(loadError((c) => c.repos.push({ ...c.repos[0] })), /listed twice/)
 })
+
+test("rejects a repo listed twice with different case", () => {
+  assert.match(loadError((c) => c.repos.push({ ...c.repos[0], repo: c.repos[0].repo.toLowerCase() })), /listed twice/)
+})
+
+test("rejects allowedActors that are not GitHub usernames, or repeat", () => {
+  assert.match(loadError((c) => (c.factory.allowedActors = ["*"])), /not a GitHub username/)
+  assert.match(loadError((c) => (c.factory.allowedActors = ["a/b"])), /not a GitHub username/)
+  assert.match(loadError((c) => (c.factory.allowedActors = ["Bob", "bob"])), /twice/)
+})
+
+test("rejects unsafe base branches and malformed command lists", () => {
+  assert.match(loadError((c) => (c.repos[0].baseBranch = "--upload-pack=evil")), /not a plain branch name/)
+  assert.match(loadError((c) => (c.repos[0].baseBranch = "a..b")), /not a plain branch name/)
+  assert.match(loadError((c) => (c.repos[0].checks = "npm test")), /list of non-empty strings/)
+  assert.match(loadError((c) => (c.repos[0].setup = [""])), /list of non-empty strings/)
+})
+
+test("rejects more workers than the Box limit", () => {
+  assert.match(loadError((c) => (c.factory.boxLimit = 1)), /boxLimit/)
+})

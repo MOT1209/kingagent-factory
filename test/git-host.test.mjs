@@ -58,3 +58,72 @@ test("the clone keeps no token in its config", () => {
   const { dir } = host.cloneBase("o/r", "main", "ghp_secret_value")
   assert.doesNotMatch(git(dir, "config", "--list", "--local").stdout, /ghp_secret_value/)
 })
+
+test("git and tar see a short list of variables, never the factory's secrets", () => {
+  const env = host.cleanEnv({ PATH: "/bin", HTTPS_PROXY: "http://p", UPSTASH_BOX_API_KEY: "k", FACTORY_SECRETS_JSON: "{}", FACTORY_GITHUB_TOKEN: "t", GIT_SSH_COMMAND: "evil", GIT_DIR: "/x", GIT_EXEC_PATH: "/y", LD_PRELOAD: "/z" })
+  assert.deepEqual(Object.keys(env).sort(), ["HTTPS_PROXY", "PATH"])
+})
+
+test("a failing git command never echoes the token", () => {
+  remoteWithBase()
+  const token = "ghp_super_secret_value_12345"
+  host.hosting.base = "file:///definitely/not/here/"
+  const basic = Buffer.from(`x-access-token:${token}`).toString("base64")
+  try {
+    host.cloneBase("o/r", "main", token)
+    assert.fail("expected a failure")
+  } catch (error) {
+    assert.doesNotMatch(error.message, new RegExp(`${token}|${basic}`))
+  }
+})
+
+test("the process environment cannot redirect the trusted git", () => {
+  const root = remoteWithBase()
+  process.env.GIT_DIR = join(root, "nonexistent")
+  process.env.GIT_SSH_COMMAND = "touch " + join(root, "pwned")
+  try {
+    const { dir } = host.cloneBase("o/r", "main")
+    assert.ok(existsSync(join(dir, "a.txt")))
+    assert.equal(existsSync(join(root, "pwned")), false)
+  } finally {
+    delete process.env.GIT_DIR
+    delete process.env.GIT_SSH_COMMAND
+  }
+})
+
+test("a patch cannot write into .git/ (hooks) of the trusted clone", () => {
+  remoteWithBase()
+  const { dir } = host.cloneBase("o/r", "main")
+  const evil = Buffer.from("diff --git a/.git/hooks/pre-commit b/.git/hooks/pre-commit\nnew file mode 100755\n--- /dev/null\n+++ b/.git/hooks/pre-commit\n@@ -0,0 +1 @@\n+touch /tmp/x\n")
+  assert.throws(() => host.applyPatch(dir, evil), /git apply failed/)
+  assert.equal(existsSync(join(dir, ".git", "hooks", "pre-commit")), false)
+})
+
+test("a hook in the clone does not run during the trusted commit", () => {
+  const root = remoteWithBase()
+  const { dir } = host.cloneBase("o/r", "main")
+  const marker = join(root, "hook-ran")
+  writeFileSync(join(dir, ".git", "hooks", "pre-commit"), `#!/bin/sh\ntouch ${marker}\n`, { mode: 0o755 })
+  writeFileSync(join(dir, "n.txt"), "n\n")
+  git(dir, "add", "-A")
+  host.commit(dir, { branch: "factory/issue-2", author: { name: "F", email: "f@e" }, message: "t\n\nFactory-Run: 2" })
+  assert.equal(existsSync(marker), false)
+})
+
+test("a push loses to a branch that moved after it was inspected", () => {
+  const root = remoteWithBase()
+  const { dir } = host.cloneBase("o/r", "main")
+  const seen = host.inspectBranch(dir, "o/r", "factory/issue-3", "")
+  // A person pushes to the branch between inspect and push.
+  const other = join(root, "person")
+  git(root, "clone", "--quiet", join(root, "o", "r.git"), other)
+  writeFileSync(join(other, "p.txt"), "human\n")
+  git(other, "add", "-A")
+  git(other, "commit", "--quiet", "-m", "human work")
+  git(other, "push", "--quiet", "origin", "HEAD:refs/heads/factory/issue-3")
+  writeFileSync(join(dir, "f.txt"), "f\n")
+  git(dir, "add", "-A")
+  host.commit(dir, { branch: "factory/issue-3", author: { name: "F", email: "f@e" }, message: "t\n\nFactory-Run: 3" })
+  assert.throws(() => host.push(dir, "o/r", "factory/issue-3", seen.remoteSha, ""), /git push failed/)
+  assert.equal(git(root, "--git-dir", join(root, "o", "r.git"), "log", "-1", "--format=%s", "factory/issue-3").stdout.trim(), "human work")
+})

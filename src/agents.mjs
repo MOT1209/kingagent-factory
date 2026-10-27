@@ -15,6 +15,8 @@ import { homedir } from "node:os"
 import { q, sh, runScript } from "./box.mjs"
 
 const HOME = "/workspace/home"
+// Everything one job writes (the checkout, prompt, logs, summary, patch) lives here.
+export const WORK_DIR = `${HOME}/work`
 const ENV_FILE = `${HOME}/.factory/env`
 export const REPO_ENV_FILE = `${HOME}/.factory/repo-env`
 
@@ -53,6 +55,45 @@ export function secretValues(config) {
 export function secretPaths(config) {
   const files = Object.values(config.agents).flatMap((a) => (a.auth ?? []).filter((x) => x.file).map((x) => x.file))
   return [`${HOME}/.factory`, ...files]
+}
+
+// What the agent could still read once it has finished: its own sign-in. The
+// repo's secrets file stays, because the checks that follow need it.
+const agentSignInPaths = (config) => [ENV_FILE, ...secretPaths(config).filter((p) => p !== `${HOME}/.factory`)]
+
+// Kills what the job left running. Only processes whose working directory is
+// inside the job's folder are touched, never the Box's own services: an agent's
+// forgotten dev server goes, upstash's daemons stay. A process that moved its
+// working directory elsewhere before detaching is out of reach from here; the
+// README names that as a residual risk.
+const killJobProcesses = (box) =>
+  sh(
+    box,
+    `for p in /proc/[0-9]*; do pid=\${p#/proc/}; [ "$pid" = "$$" ] && continue; cwd=$(readlink "$p/cwd" 2>/dev/null); case "$cwd" in ${WORK_DIR}|${WORK_DIR}/*) /bin/kill -KILL "$pid" 2>/dev/null;; esac; done; true`,
+    { allowFailure: true },
+  )
+
+// Right after the agent: nothing the agent started may keep running next to the
+// checks, and its sign-in is gone before the repo's own commands run.
+export async function endAgentSession(box, config) {
+  await killJobProcesses(box)
+  await sh(box, `rm -rf ${agentSignInPaths(config).map(q).join(" ")}`)
+}
+
+// Removes everything a job left in the Box and PROVES it is gone, so a paused
+// Box never holds the last job's code, prompt, logs or sign-in. Returns the
+// paths that are still there. An empty list is the only "clean". A caller that
+// gets leftovers keeps the worker claimed instead of handing a dirty Box on.
+export async function scrubBox(box, config) {
+  const paths = [...secretPaths(config), WORK_DIR, "~/.git-credentials"]
+  try {
+    await killJobProcesses(box)
+    await sh(box, `rm -rf ${paths.map((p) => (p.startsWith("~/") ? p : q(p))).join(" ")}`, { allowFailure: true })
+    const left = (await sh(box, `ls -d ${paths.map((p) => (p.startsWith("~/") ? p : q(p))).join(" ")} 2>/dev/null; true`, { allowFailure: true })).output
+    return left.split("\n").map((l) => l.trim()).filter(Boolean)
+  } catch (error) {
+    return [`(could not check: ${error.message})`]
+  }
 }
 
 export async function signIn(box, config, agentName) {
@@ -124,6 +165,7 @@ export async function runAgent(box, config, agentName, { workDir, jobDir, prompt
 
   // Empty when the agent's command did not get its reply into {summary}. The
   // smoke test warns about that, because the pull request text comes from here.
-  const summary = (await sh(box, `cat ${summaryFile} 2>/dev/null`, { allowFailure: true })).output.trim()
+  // Capped at the source: an agent that wrote gigabytes must not be read whole.
+  const summary = (await sh(box, `head -c 200000 ${summaryFile} 2>/dev/null`, { allowFailure: true })).output.trim()
   return { ...result, summary }
 }

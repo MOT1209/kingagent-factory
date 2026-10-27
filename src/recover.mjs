@@ -8,8 +8,8 @@
 //
 // Both only touch what carries a run's own label, and leave alone anything
 // owned by a run that may still be alive. Running them twice changes nothing.
-import { q, sh, runLabelFor, isRunLabel } from "./box.mjs"
-import { secretPaths } from "./agents.mjs"
+import { runLabelFor, isRunLabel } from "./box.mjs"
+import { scrubBox } from "./agents.mjs"
 import { ownerRun } from "./github.mjs"
 import { transitions, applyTransition } from "./issue-state.mjs"
 
@@ -34,7 +34,13 @@ export async function recoverRun(config, runId, { listBoxes, getBox, api, issue,
       if (data.status === "paused") await box.resume()
       // Secrets first, then the labels, so no new run can claim a Box that
       // still holds the last run's sign-in files.
-      await sh(box, `rm -rf ${secretPaths(config).map(q).join(" ")} ~/.git-credentials`, { allowFailure: true })
+      // The removal is checked: a Box that still holds the last job's files
+      // keeps its labels, so nobody else can claim it.
+      const left = await scrubBox(box, config)
+      if (left.length) {
+        log(`Could not clean ${data.name ?? data.id}: ${left.join(", ")}. It stays claimed. Clean it by hand, then free it with scripts/release-worker.mjs.`)
+        continue
+      }
       // Same order as releaseWorker: busy, then the run label. While the run
       // label is on, no other run can have claimed the Box, so its busy is ours.
       await box.labels.remove(config.factory.busyLabel)
