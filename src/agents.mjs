@@ -119,7 +119,7 @@ export async function runAgent(box, config, agentName, { workDir, jobDir, prompt
     dir: jobDir,
     timeoutMinutes,
     onTick: (minutes) => console.log(`  agent still working (${minutes} min)`),
-    body: [`source ${ENV_FILE}`, `source ${REPO_ENV_FILE} 2>/dev/null || true`, "export PATH=$HOME/.local/bin:$PATH", `cd ${q(workDir)}`, command],
+    body: [`source ${ENV_FILE}`, `source ${REPO_ENV_FILE} 2>/dev/null || true`, "export PATH=$HOME/.local/bin:$PATH", `cd ${q(workDir)} || exit 97`, command],
   })
 
   // Empty when the agent's command did not get its reply into {summary}. The

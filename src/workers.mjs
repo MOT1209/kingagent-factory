@@ -11,8 +11,10 @@ export async function getWorkerStates(config) {
     const box = byName.get(boxNameFor(config, worker))
     let state = "free"
     if (!worker.enabled) state = "disabled"
-    else if (box && (box.labels ?? []).includes(config.factory.busyLabel)) state = "busy"
-    return { ...worker, boxName: boxNameFor(config, worker), boxId: box?.id ?? null, boxStatus: box?.status ?? "not created", state }
+    // A run label alone also means busy: a run is claiming or holding the Box.
+    else if (box && (box.labels ?? []).some((l) => l === config.factory.busyLabel || l.startsWith("run-"))) state = "busy"
+    const runs = (box?.labels ?? []).filter((l) => l.startsWith("run-"))
+    return { ...worker, boxName: boxNameFor(config, worker), boxId: box?.id ?? null, boxStatus: box?.status ?? "not created", state, runs }
   })
 }
 

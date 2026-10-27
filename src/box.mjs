@@ -5,6 +5,9 @@ import { getWorkerStates, pickWorker } from "./workers.mjs"
 const BOX_TIMEOUT_MS = 15 * 60 * 1000
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
+// How often runScript looks at a background script. Tests shorten it.
+export const timing = { pollMs: 10_000 }
+
 // Quotes a value for use inside a shell command.
 export const q = (value) => `'${String(value).replace(/'/g, `'\\''`)}'`
 
@@ -45,7 +48,7 @@ export async function runScript(box, { name, dir, body, timeoutMinutes = 20, onT
 
   const started = Date.now()
   while (Date.now() - started < timeoutMinutes * 60 * 1000) {
-    await sleep(10_000)
+    await sleep(timing.pollMs)
     const { output } = await sh(box, `cat ${base}.exit 2>/dev/null || echo running`)
     const minutes = ((Date.now() - started) / 60000).toFixed(1)
     if (output.trim() === "running") {
@@ -181,12 +184,25 @@ export async function createAgentBox(config, agentName, name, labels) {
 
 export const imageFor = (config, agentName) => config.agents[agentName].snapshotId ?? config.factory.snapshotId ?? null
 
-// Waits for a free worker, then marks its Box busy. Two factory runs can start
-// at the same moment and pick the same worker, so each run also adds its own
-// run label. If two run labels show up, the higher one backs off.
+// Waits for a free worker and claims its Box.
+//
+// Box labels have no compare-and-set, so the claim is built from two steps
+// that are each atomic: adding a label, and listing the labels.
+//
+//   1. Skip a Box that already carries `busy` or any "run-" label.
+//   2. Add this run's own label, "run-<run id>".
+//   3. List the labels again. If any other "run-" label is there, remove ours,
+//      wait a random moment and start over. Otherwise the Box is ours, and only
+//      then is `busy` added, as a hint for status and the worker list.
+//
+// Two runs can never both get past step 3: whichever of them listed first
+// had already added its label, so the other one's list shows it. In the worst
+// case both retreat and retry. This holds as long as Upstash answers a label
+// list with every label added before it, which the factory assumes.
 //
 // `deps` exists for the tests, which race claimers against in-memory Boxes.
 export const runLabelFor = (runId) => `run-${runId}`.slice(0, 20)
+export const isRunLabel = (label) => label.startsWith("run-")
 
 const defaultDeps = {
   getStates: getWorkerStates,
@@ -199,7 +215,9 @@ const defaultDeps = {
 export async function claimWorker(config, issueLabels, runId, deps = {}) {
   const { getStates, getBox, createBox, sleep: wait, log } = { ...defaultDeps, ...deps }
   const runLabel = runLabelFor(runId)
+  const busy = config.factory.busyLabel
   const deadline = Date.now() + (config.factory.waitForWorkerMinutes ?? 30) * 60 * 1000
+  const backOff = () => wait(1_000 + Math.random() * 4_000)
 
   for (let attempt = 0; Date.now() < deadline; attempt++) {
     const spread = Number(String(runId).replace(/\D/g, "").slice(-6)) + attempt
@@ -211,56 +229,86 @@ export async function claimWorker(config, issueLabels, runId, deps = {}) {
     }
 
     let box
+    let labelled = false
     try {
-      if (worker.boxId) {
-        box = await getBox(worker.boxId)
-      } else {
-        log(`Creating Box ${worker.boxName}...`)
-        box = await createBox(config, worker)
-      }
-      // The worker list can be seconds old. A run that already holds this Box
-      // has added its labels by now, and a late claimer must not join it.
-      const held = (await box.labels.list()).filter((l) => l === config.factory.busyLabel || l.startsWith("run-"))
+      box = worker.boxId ? await getBox(worker.boxId) : (log(`Creating Box ${worker.boxName}...`), await createBox(config, worker))
+      const held = (await box.labels.list()).filter((l) => l === busy || isRunLabel(l))
       if (held.length) {
         log(`Worker ${worker.id} was taken meanwhile (${held.join(", ")}). Trying another.`)
-        box = undefined
-        await wait(2_000 + Math.random() * 3_000)
+        await backOff()
         continue
       }
       // A Box holds at most five labels, so a crowded Box can refuse the label.
-      // That also means another run got there first.
+      // That also means other runs are on it.
       await box.labels.add(runLabel)
-      await box.labels.add(config.factory.busyLabel)
+      labelled = true
+      const rivals = (await box.labels.list()).filter((l) => isRunLabel(l) && l !== runLabel)
+      if (rivals.length) {
+        log(`Another run reached worker ${worker.id} at the same moment (${rivals.join(", ")}). Backing off.`)
+        await box.labels.remove(runLabel)
+        labelled = false
+        await backOff()
+        continue
+      }
+      await box.labels.add(busy)
+      // A Box that cannot be woken is no use. Give it back rather than hold it.
+      if (worker.boxStatus === "paused") await box.resume()
+      return { worker, box, runLabel }
     } catch (error) {
       log(`Could not claim worker ${worker.id} (${error.message}). Trying another.`)
-      await box?.labels.remove(runLabel).catch(() => {})
-      await wait(2_000 + Math.random() * 3_000)
-      continue
+      // Only this run's own labels are taken back. `busy` is only ever added
+      // by the run that holds the Box, which here is this run.
+      if (labelled) {
+        await box.labels.remove(busy).catch(() => {})
+        await box.labels.remove(runLabel).catch(() => {})
+      }
+      await backOff()
     }
-
-    // Give a rival run a moment to add its label, then look again.
-    await wait(4_000)
-    const rivals = (await box.labels.list()).filter((l) => l.startsWith("run-") && l !== runLabel)
-    if (rivals.some((l) => l < runLabel)) {
-      log(`Worker ${worker.id} was claimed by another run at the same moment. Trying another.`)
-      await box.labels.remove(runLabel)
-      continue
-    }
-
-    if (worker.boxStatus === "paused") await box.resume()
-    return { worker, box, runLabel }
   }
   return null
 }
 
+// `busy` goes first and the run label last. While the run label is there no
+// other run can claim the Box, so a new owner's `busy` is never removed by us.
 export async function releaseWorker(config, claim) {
   const { box, runLabel, worker } = claim
   try {
-    await box.labels.remove(runLabel)
     await box.labels.remove(config.factory.busyLabel)
-    await box.pause()
+    await box.pause().catch((error) => console.error(`Could not pause ${worker.id}: ${error.message}`))
+    await box.labels.remove(runLabel)
     console.log(`Released worker ${worker.id} and paused its Box.`)
   } catch (error) {
-    console.error(`Could not fully release worker ${worker.id}: ${error.message}`)
+    console.error(`Could not fully release worker ${worker.id}: ${error.message}. Run scripts/recover-run.mjs or scripts/release-worker.mjs.`)
   }
+}
+
+// Moves bytes into and out of a Box through the files API, in chunks, and
+// checks the SHA-256 on both ends, so a broken transfer fails loudly instead of
+// becoming a wrong checkout or a wrong patch.
+const CHUNK = 3 * 1024 * 1024
+const sha256 = async (bytes) => (await import("node:crypto")).createHash("sha256").update(bytes).digest("hex")
+const boxSha = async (box, path) => /^[0-9a-f]{64}/.exec((await sh(box, `sha256sum ${q(path)}`)).output)?.[0]
+
+export async function uploadBytes(box, path, bytes) {
+  const parts = []
+  for (let i = 0; i * CHUNK < bytes.length || i === 0; i++) {
+    const part = `${path}.part-${String(i).padStart(5, "0")}`
+    await box.files.write({ path: part, content: bytes.subarray(i * CHUNK, (i + 1) * CHUNK).toString("base64"), encoding: "base64" })
+    parts.push(part)
+  }
+  await sh(box, `cat ${parts.map(q).join(" ")} > ${q(path)} && rm -f ${parts.map(q).join(" ")}`)
+  if ((await boxSha(box, path)) !== (await sha256(bytes))) throw new Error(`Upload of ${path} into the Box arrived damaged (checksum mismatch).`)
+}
+
+// `maxBytes` stops a runaway file (an agent that wrote gigabytes) before it is read.
+export async function downloadBytes(box, path, { maxBytes = 50 * 1024 * 1024 } = {}) {
+  const size = Number((await sh(box, `wc -c < ${q(path)}`)).output.trim())
+  if (!Number.isFinite(size) || size > maxBytes) throw new Error(`${path} in the Box is ${size} bytes, more than the ${maxBytes} the factory accepts. The change is too large to be a reviewable pull request.`)
+  const chunks = []
+  for (let offset = 0; offset < size; offset += CHUNK) {
+    chunks.push(Buffer.from(await box.files.read(path, { encoding: "base64", offset, length: Math.min(CHUNK, size - offset) }), "base64"))
+  }
+  const bytes = Buffer.concat(chunks)
+  if (bytes.length !== size || (size > 0 && (await sha256(bytes)) !== (await boxSha(box, path)))) throw new Error(`Download of ${path} from the Box arrived damaged (checksum mismatch).`)
+  return bytes
 }
