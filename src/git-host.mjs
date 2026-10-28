@@ -98,6 +98,20 @@ export function applyPatch(dir, patch) {
   return git(dir, ["diff", "--cached", "--name-only", "--no-renames", "-z"]).stdout.split("\0").filter(Boolean)
 }
 
+// What the staged change does to each file: status (A, M, D, T), lines added and
+// removed (null for binary). Both sides of a rename are listed, as in applyPatch.
+export function stagedChanges(dir) {
+  const status = git(dir, ["diff", "--cached", "--name-status", "--no-renames", "-z"]).stdout.split("\0").filter(Boolean)
+  const stat = git(dir, ["diff", "--cached", "--numstat", "--no-renames", "-z"]).stdout.split("\0").filter(Boolean)
+  const lines = new Map(stat.map((entry) => {
+    const [added, deleted, ...path] = entry.split("\t")
+    return [path.join("\t"), { added: added === "-" ? null : Number(added), deleted: deleted === "-" ? null : Number(deleted) }]
+  }))
+  const changes = []
+  for (let i = 0; i + 1 < status.length; i += 2) changes.push({ status: status[i][0], file: status[i + 1], ...(lines.get(status[i + 1]) ?? { added: null, deleted: null }) })
+  return changes
+}
+
 export function commit(dir, { branch, author, message }) {
   git(dir, ["checkout", "--quiet", "-B", branch])
   git(dir, ["-c", `user.name=${author.name}`, "-c", `user.email=${author.email}`, "commit", "--quiet", "--no-verify", "-F", "-"], { input: message })

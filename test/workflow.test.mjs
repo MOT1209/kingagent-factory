@@ -40,3 +40,32 @@ test("npm ci never sees a secret", () => {
   const next = workflow.indexOf("\n      - ", start + 1)
   assert.doesNotMatch(workflow.slice(start, next), /secrets\./)
 })
+
+// --- the scheduled sweep (reap.yml) ---
+const reap = readFileSync(new URL("../.github/workflows/reap.yml", import.meta.url), "utf8")
+
+test("reap.yml is read-only for the repo, keeps no checkout token, and npm ci sees no secret", () => {
+  assert.match(reap, /permissions:\s*\n\s*contents: read\s*\n\s*actions: read/)
+  assert.match(reap, /persist-credentials: false/)
+  const start = reap.indexOf("- run: npm ci")
+  assert.doesNotMatch(reap.slice(start, reap.indexOf("\n      - name:", start)), /secrets\./)
+  assert.doesNotMatch(reap, /toJSON\(\s*secrets\s*\)/)
+})
+
+test("reap.yml passes the two secrets the sweep needs and runs only the sweep", () => {
+  for (const secret of ["UPSTASH_BOX_API_KEY", "FACTORY_GITHUB_TOKEN"]) assert.match(reap, new RegExp(`${secret}: \\$\\{\\{ secrets\\.${secret} \\}\\}`))
+  assert.match(reap, /node scripts\/reap-stale\.mjs/)
+  assert.doesNotMatch(reap, /src\/run\.mjs/)
+})
+
+test("reap.yml has a schedule, a time limit and no overlapping sweeps", () => {
+  assert.match(reap, /schedule:\s*\n\s*- cron: "/)
+  assert.match(reap, /timeout-minutes: \d+/)
+  assert.match(reap, /concurrency:\s*\n\s*group: reap-stale/)
+})
+
+test("dependabot watches Actions and npm", () => {
+  const d = readFileSync(new URL("../.github/dependabot.yml", import.meta.url), "utf8")
+  assert.match(d, /package-ecosystem: github-actions/)
+  assert.match(d, /package-ecosystem: npm/)
+})

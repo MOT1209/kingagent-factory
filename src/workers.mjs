@@ -28,12 +28,15 @@ export async function getWorkerStates(config) {
 // 3. Among types with the same priority, the one with the smaller SHARE of busy
 //    workers goes first, so work spreads evenly whatever the pool sizes are.
 //
+// `exclude` names agent types to skip, for a second attempt after one of them
+// hit a provider limit.
+//
 // When many issues arrive at once, every run sees the same free workers. The
 // spread number (the run id) makes each run start at a different worker, so
 // they rarely reach for the same one.
-export function pickWorker(states, issueLabels = [], spread = 0, agents = {}) {
+export function pickWorker(states, issueLabels = [], spread = 0, agents = {}, exclude = []) {
   const forced = issueLabels.map((l) => /^agent:(.+)$/.exec(l)?.[1]).find(Boolean)
-  const free = states.filter((w) => w.state === "free" && (!forced || w.agent === forced))
+  const free = states.filter((w) => w.state === "free" && (!forced || w.agent === forced) && !exclude.includes(w.agent))
   if (free.length === 0) return null
 
   const priority = (agent) => agents[agent]?.priority ?? 0

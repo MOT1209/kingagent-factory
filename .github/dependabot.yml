@@ -1,0 +1,14 @@
+# Keeps the pinned versions current. For GitHub Actions, Dependabot pins nothing
+# by itself: change each `uses:` to a full commit SHA once (with the tag in a
+# comment, e.g. `uses: actions/checkout@<sha> # v4.2.2`) and Dependabot then
+# proposes SHA updates as pull requests, which a person reviews.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
