@@ -70,16 +70,10 @@ export function inspectBranch(dir, repo, branch, token) {
   return { remoteSha, humanCommit: !isFactoryCommit(git(dir, ["log", "-1", "--format=%B", "FETCH_HEAD"]).stdout) }
 }
 
-// The clone as a gzipped tarball, for the Box.
+// The clone as a gzipped tarball, for the Box. It goes through stdout, not a
+// file: GNU tar reads a Windows path like C:\... after -f as host:path.
 export function packRepo(dir) {
-  const folder = mkdtempSync(join(tmpdir(), "factory-tar-"))
-  try {
-    const file = join(folder, "repo.tgz")
-    execFileSync("tar", ["-czf", file, "-C", dir, "."], { env: cleanEnv() })
-    return readFileSync(file)
-  } finally {
-    rmSync(folder, { recursive: true, force: true })
-  }
+  return execFileSync("tar", ["-czf", "-", "-C", dir, "."], { env: cleanEnv(), maxBuffer: 1024 * 1024 * 1024 })
 }
 
 // Applies the Box's patch to the clone and stages it. Returns the staged files.

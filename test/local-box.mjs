@@ -7,9 +7,12 @@ import { mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs"
 import { dirname } from "node:path"
 
 export function localBox({ root, id = "local-box", name = "kaf-claude-01", labels = [] }) {
+  root = root.replaceAll("\\", "/") // sh eats backslashes in Windows paths
   const home = `${root}/home`
   mkdirSync(home, { recursive: true })
   const map = (text) => String(text).replaceAll("/workspace/home", home).replaceAll("/home/boxuser", `${root}/boxuser`)
+  // GNU tar on Windows reads C:/... as host:path; a real Box is Linux and needs none of this.
+  const local = (text) => (process.platform === "win32" ? text.split("tar ").join("tar --force-local ") : text)
   const tick = () => new Promise((resolve) => setImmediate(resolve))
 
   const box = {
@@ -35,7 +38,7 @@ export function localBox({ root, id = "local-box", name = "kaf-claude-01", label
     exec: {
       command: async (command) => {
         box.commands.push(command)
-        const r = spawnSync("sh", ["-c", map(command)], { cwd: home, env: { PATH: process.env.PATH, HOME: home, LANG: "C" }, encoding: "utf8" })
+        const r = spawnSync("sh", ["-c", local(map(command))], { cwd: home, env: { PATH: process.env.PATH, HOME: home, LANG: "C" }, encoding: "utf8" })
         return { status: r.status === 0 ? "completed" : "failed", result: `${r.stdout}${r.stderr}` }
       },
     },

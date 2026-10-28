@@ -127,3 +127,12 @@ test("a push loses to a branch that moved after it was inspected", () => {
   assert.throws(() => host.push(dir, "o/r", "factory/issue-3", seen.remoteSha, ""), /git push failed/)
   assert.equal(git(root, "--git-dir", join(root, "o", "r.git"), "log", "-1", "--format=%s", "factory/issue-3").stdout.trim(), "human work")
 })
+
+test("packRepo makes a tarball that unpacks to the same files, whatever the temp path looks like", () => {
+  remoteWithBase()
+  const { dir } = host.cloneBase("o/r", "main")
+  const unpacked = mkdtempSync(join(tmpdir(), "githost-unpack-"))
+  const result = spawnSync("tar", ["-xzf", "-"], { cwd: unpacked, input: host.packRepo(dir), encoding: "utf8" })
+  assert.equal(result.status, 0, result.stderr)
+  assert.equal(existsSync(join(unpacked, "a.txt")), true)
+})
