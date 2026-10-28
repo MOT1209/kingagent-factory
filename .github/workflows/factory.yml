@@ -40,7 +40,7 @@ jobs:
       FACTORY_REPO: ${{ github.event.client_payload.repo || inputs.repo }}
       FACTORY_ISSUE: ${{ github.event.client_payload.issue || inputs.issue }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # The workflow never pushes to this repo, so its token stays out of .git.
           persist-credentials: false
