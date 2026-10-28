@@ -111,3 +111,12 @@ test("release removes busy before the run label and pauses the Box", async () =>
   assert.equal(boxes[0].status, "paused")
   assert.deepEqual(runLabels(boxes[0]), [])
 })
+
+test("a run waiting for a worker polls every 10-15 seconds, not every 30", async () => {
+  const waits = []
+  const cfg = { factory: { busyLabel: "busy", boxLabel: "kingagent-fac" }, agents: {}, workers: [] }
+  // 0.002 minutes of real time to wait; the sleeps themselves are stubbed.
+  const result = await claimWorker(cfg, [], "9001", { getStates: async () => [], sleep: async (ms) => void waits.push(ms), log: () => {}, waitMinutes: 0.002 })
+  assert.equal(result, null)
+  assert.ok(waits.length >= 3 && waits.every((ms) => ms >= 10_000 && ms <= 15_000), waits.slice(0, 5).join(","))
+})

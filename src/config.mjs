@@ -119,6 +119,10 @@ export function loadConfig(file = CONFIG_FILE) {
     repoNames.add(String(repo.repo).toLowerCase())
     if (!repo.baseBranch) errors.push(`repo "${repo.repo}" needs a baseBranch`)
     else if (!/^[A-Za-z0-9._/-]+$/.test(repo.baseBranch) || /(^[-/.]|\.\.|\/\/|\.lock$|\/$)/.test(repo.baseBranch)) errors.push(`repo "${repo.repo}": baseBranch "${repo.baseBranch}" is not a plain branch name`)
+    for (const key of ["maxFiles", "maxChangedLines"]) {
+      const value = repo.limits?.[key]
+      if (value !== undefined && !(Number.isInteger(value) && value > 0)) errors.push(`repo "${repo.repo}": limits.${key} must be a positive whole number`)
+    }
     for (const key of ["setup", "checks", "exclude"]) {
       if (repo[key] !== undefined && (!Array.isArray(repo[key]) || repo[key].some((c) => typeof c !== "string" || !c.trim()))) errors.push(`repo "${repo.repo}": ${key} must be a list of non-empty strings`)
     }

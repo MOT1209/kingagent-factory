@@ -203,6 +203,27 @@ npm run check                                                    # syntax of eve
 
 **Retrying an issue safely.** Read the factory's comment, fix the cause, then add `ready` again. A retry builds from the base branch again. It replaces the factory's own `factory/issue-<n>` branch, and only if that branch has not moved since the run looked at it. It updates the open PR rather than opening a second one. If a person has pushed to that branch, the run stops instead, so merge or close that PR and delete the branch first.
 
+## Operating the factory
+
+| You want to | Run |
+|---|---|
+| Know if everything is healthy | `node --env-file=.env scripts/doctor.mjs` (setup check + workers; exit 1 if anything needs attention) |
+| See the workers and whether a claim is stale | `node --env-file=.env scripts/status.mjs [--json]` (add `GITHUB_TOKEN` to check claims against GitHub) |
+| Free workers of finished runs | automatic before every run and every 3 hours (`.github/workflows/reap.yml`); by hand: `scripts/reap-stale.mjs` |
+| Free one stuck worker | `scripts/release-worker.mjs <worker id>`. It cleans the Box first and refuses to free one it cannot clean |
+| Total up usage | `gh run view <id> --log \| node scripts/report.mjs` (runs, outcomes, agent minutes, share of runs that ended in a PR, per agent) |
+
+Every run writes a short summary on its Actions page (outcome, worker, agent time, PR, reason) and one `factory-stats` line in its log.
+
+What an outcome means:
+
+- **review**: a pull request is open. Review it; nothing is merged for you.
+- **needs-attention**: the issue comment says why (agent error, failed check, question, too big, protected files, change too large, setup failure). Fix the cause, then add `ready` again.
+- **no-worker**: no worker became free in time; the issue kept `ready`.
+- **a provider limit** (usage limit, overload): once per run, the issue moves to a worker of *another* agent type, if one exists, the issue has no `agent:<name>` label and a shorter second pass fits `factory.runBudgetMinutes` (default 155). The second pass waits at most 10 minutes for a worker and gives its agent no second round after a failed check.
+
+Reviewed before a push: more than 100 files or 5,000 changed lines (per repo: `limits.maxFiles`, `limits.maxChangedLines`), a change that only touches lockfiles, or only deletes tests, is not pushed. A change that deletes some tests, or changes a lockfile together with code, is pushed with a note in the PR. The agent can also reply `NEEDS_SPLIT:` with smaller issues when the task is too big.
+
 ## What protects a run
 
 - **Who can start it.** The trigger only fires for users in `allowedActors`. `run.mjs` refuses manual runs from anyone else, and repos that are not in the config.

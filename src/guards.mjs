@@ -48,3 +48,30 @@ export function trustedComments(comments, allowedActors) {
 // for the same reason. A real code or test failure never matches.
 const TRANSIENT_AGENT = /usage limit|weekly limit|rate.?limit|quota|too many requests|overloaded|at capacity|temporarily unavailable|try again (later|in)|\b(429|503|529)\b|ECONNRESET|ETIMEDOUT|socket hang up/i
 export const isTransientAgentFailure = (text) => TRANSIENT_AGENT.test(String(text ?? ""))
+
+// --- the shape of a change -------------------------------------------------
+// The host decides, from the staged diff, whether a change is reasonable to put
+// in front of a reviewer. These are cheap guards against a runaway agent, not a
+// judgement of quality.
+export const DEFAULT_LIMITS = { maxFiles: 100, maxChangedLines: 5000 }
+
+const LOCKFILE = /(^|\/)(package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|Cargo\.lock|poetry\.lock|Gemfile\.lock|go\.sum)$/
+const TEST_FILE = /(^|\/)(tests?|__tests__|spec)\/|\.(test|spec)\.[A-Za-z0-9]+$|(^|\/)test_[^/]+\.py$/
+
+// Returns { refuse, flags }. `refuse` is a sentence (or null) that stops the push;
+// `flags` are notes for the pull request's description.
+export function reviewChange(changes, limits = {}) {
+  const { maxFiles, maxChangedLines } = { ...DEFAULT_LIMITS, ...limits }
+  const flags = []
+  const total = changes.reduce((sum, c) => sum + (c.added ?? 0) + (c.deleted ?? 0), 0)
+
+  if (changes.length > maxFiles) return { refuse: `The change touches ${changes.length} files, more than the ${maxFiles} the factory accepts for one pull request. Split the issue into smaller ones.`, flags }
+  if (total > maxChangedLines) return { refuse: `The change adds or removes ${total} lines, more than the ${maxChangedLines} the factory accepts for one pull request. Split the issue into smaller ones.`, flags }
+  if (changes.length > 0 && changes.every((c) => LOCKFILE.test(c.file))) return { refuse: "The change only touches lockfiles, which is not a change anyone asked for.", flags }
+
+  const removedTests = changes.filter((c) => c.status === "D" && TEST_FILE.test(c.file))
+  if (changes.length > 0 && removedTests.length === changes.length) return { refuse: "The change only deletes test files. Deleting tests is not a way to make checks pass.", flags }
+  if (removedTests.length) flags.push(`Deletes ${removedTests.length} test file(s): ${removedTests.slice(0, 10).map((c) => `\`${c.file}\``).join(", ")}. Check that this is intended.`)
+  if (changes.some((c) => LOCKFILE.test(c.file)) && changes.length > 1) flags.push("Changes a lockfile together with code. Check the dependency changes.")
+  return { refuse: null, flags }
+}

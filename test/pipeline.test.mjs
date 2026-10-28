@@ -4,10 +4,10 @@
 import { test, beforeEach } from "node:test"
 import assert from "node:assert/strict"
 import { spawnSync } from "node:child_process"
-import { mkdtempSync, writeFileSync, chmodSync, readdirSync, readFileSync, statSync } from "node:fs"
+import { mkdtempSync, writeFileSync, chmodSync, readdirSync, readFileSync, statSync, mkdirSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { runIssue } from "../src/pipeline.mjs"
+import { runIssue, buildPrompt } from "../src/pipeline.mjs"
 import { claimWorker, releaseWorker, timing, runLabelFor } from "../src/box.mjs"
 import { hosting } from "../src/git-host.mjs"
 import { makeRedactor, isFactoryCommit } from "../src/guards.mjs"
@@ -558,4 +558,45 @@ test("the second pass gives its agent no second round after a failed check", asy
   assert.equal(await s.run({ info }), "retry-elsewhere")
   assert.equal(await s.run({ info, continuing: true, excludeAgents: info.excludeAgents }), "needs-attention")
   assert.equal(readFileSync(join(s.box2.home, "second-agent-runs"), "utf8").trim().split("\n").length, 1)
+})
+
+// --- shape of the change, PR body, splitting ---
+test("the PR lists the files and the line counts the host measured", async () => {
+  const s = setup()
+  assert.equal(await s.run(), "review")
+  assert.match(s.api.prs[0].body, /## Files\n- `README\.md` \(changed, \+1 -0\)/)
+})
+
+test("a change over the repo's line limit is not pushed", async () => {
+  const s = setup({ configure: (c) => (c.repos[0].limits = { maxChangedLines: 1 }), agent: `printf 'a\\nb\\nc\\n' >> README.md; echo ok > {summary}`, checks: [] })
+  assert.equal(await s.run(), "needs-attention")
+  assert.match(lastComment(s.api), /3 lines, more than the 1 the factory accepts/)
+  assert.equal(remoteBranch(), "")
+})
+
+test("a change that only deletes tests is not pushed", async () => {
+  const seed = ctx.seed
+  mkdirSync(join(seed, "test"), { recursive: true })
+  writeFileSync(join(seed, "test", "a.test.js"), "x\n")
+  git(seed, "add", "-A")
+  git(seed, "commit", "--quiet", "-m", "tests")
+  git(seed, "push", "--quiet", ctx.remote, "HEAD:refs/heads/main")
+  const s = setup({ agent: `rm test/a.test.js; echo ok > {summary}`, checks: [] })
+  assert.equal(await s.run(), "needs-attention")
+  assert.match(lastComment(s.api), /only deletes test files/)
+  assert.equal(remoteBranch(), "")
+})
+
+test("the agent says the issue is too big: the suggestion goes to the issue, nothing is pushed", async () => {
+  const s = setup({ agent: `printf 'NEEDS_SPLIT:\\n1. Add the API\\n2. Add the UI\\n' > {summary}` })
+  assert.equal(await s.run(), "needs-attention")
+  assert.match(lastComment(s.api), /too big for one pull request[\s\S]*> 1\. Add the API\n> 2\. Add the UI/)
+  assert.equal(remoteBranch(), "")
+  assertReleasedAndClean(s)
+})
+
+test("the prompt tells the agent about both ways to stop early", () => {
+  const prompt = buildPrompt({ repo: REPO, checks: [] }, { number: 1, title: "t", body: "b" }, [])
+  assert.match(prompt, /NEEDS_CLARIFICATION:/)
+  assert.match(prompt, /NEEDS_SPLIT:/)
 })

@@ -223,8 +223,12 @@ export async function claimWorker(config, issueLabels, runId, deps = {}) {
     const spread = Number(String(runId).replace(/\D/g, "").slice(-6)) + attempt
     const worker = pickWorker(await getStates(config), issueLabels, spread, config.agents, excludeAgents)
     if (!worker) {
-      log("No free worker. Checking again in 30 seconds.")
-      await wait(30_000)
+      // A worker is freed by another run at an unpredictable moment; polling every
+      // 10-15 s (jittered, so waiting runs do not all ask at once) finds it sooner
+      // than a fixed 30 s, and Box.list is one cheap call.
+      const pause = Math.round(10_000 + Math.random() * 5_000)
+      log(`No free worker. Checking again in ${Math.round(pause / 1000)} seconds.`)
+      await wait(pause)
       continue
     }
 

@@ -52,3 +52,34 @@ export function writeJobSummary(text, env = process.env, append = appendFileSync
     return false
   }
 }
+
+// --- totals over many runs ---------------------------------------------------
+// Reads the `::notice title=factory-stats::{...}` lines that run.mjs prints
+// (from `gh run view <id> --log`, or several runs' logs concatenated) and totals
+// them: runs, outcomes, agent minutes and success rate per agent.
+export function aggregateStats(text) {
+  const records = []
+  for (const line of String(text).split("\n")) {
+    const at = line.indexOf("title=factory-stats::")
+    if (at < 0) continue
+    try {
+      records.push(JSON.parse(line.slice(at + "title=factory-stats::".length)))
+    } catch {
+      // a cut or garbled line is skipped, not fatal
+    }
+  }
+  // One run can appear twice when logs overlap; the run id and issue identify it.
+  const unique = [...new Map(records.map((r) => [`${r.runId}:${r.repo}#${r.issue}`, r])).values()]
+  const byAgent = {}
+  const outcomes = {}
+  for (const r of unique) {
+    outcomes[r.outcome] = (outcomes[r.outcome] ?? 0) + 1
+    const key = r.agent ?? "none"
+    const a = (byAgent[key] ??= { runs: 0, review: 0, minutes: 0 })
+    a.runs++
+    a.minutes = Number((a.minutes + (r.agentMinutes ?? 0)).toFixed(2))
+    if (r.outcome === "review") a.review++
+  }
+  for (const a of Object.values(byAgent)) a.successRate = a.runs ? Number((a.review / a.runs).toFixed(2)) : 0
+  return { runs: unique.length, outcomes, byAgent, agentMinutes: Number(Object.values(byAgent).reduce((s, a) => s + a.minutes, 0).toFixed(2)) }
+}
