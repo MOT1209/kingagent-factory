@@ -63,7 +63,7 @@ export function loadConfig(file = CONFIG_FILE) {
   }
   if (!config.factory.boxNamePrefix || !/^[a-z0-9-]+$/.test(config.factory.boxNamePrefix)) errors.push(`factory.boxNamePrefix "${config.factory.boxNamePrefix}" must be lowercase letters, digits and dashes`)
 
-  for (const key of ["waitForWorkerMinutes", "agentTimeoutMinutes", "commandTimeoutMinutes", "imageBuildTimeoutMinutes", "boxLimit"]) {
+  for (const key of ["waitForWorkerMinutes", "agentTimeoutMinutes", "commandTimeoutMinutes", "imageBuildTimeoutMinutes", "boxLimit", "runBudgetMinutes"]) {
     const value = config.factory[key]
     if (value !== undefined && !(Number.isFinite(value) && value > 0)) errors.push(`factory.${key} must be a positive number`)
   }
@@ -161,3 +161,20 @@ export function boxNameFor(config, worker) {
 export function usedAgents(config) {
   return [...new Set(config.workers.filter((w) => w.enabled).map((w) => w.agent))]
 }
+
+// The longest one pass can take: waiting for a worker, setup plus two rounds of
+// checks, and two agent runs. check-setup.mjs compares it with the workflow's
+// time limit.
+export const worstPassMinutes = (config) =>
+  (config.factory.waitForWorkerMinutes ?? 30) + 3 * (config.factory.commandTimeoutMinutes ?? 20) + 2 * (config.factory.agentTimeoutMinutes ?? 25)
+
+// A second pass, after the first agent's provider reported a limit, is shorter
+// on purpose: it waits at most SECOND_PASS_WAIT minutes for a worker, and the
+// agent gets no second round after a failed check. It starts only if it still
+// ends inside the run budget: elapsed + secondPassMinutes <= runBudgetMinutes.
+export const SECOND_PASS_WAIT = 10
+export const secondPassWait = (config) => Math.min(SECOND_PASS_WAIT, config.factory.waitForWorkerMinutes ?? 30)
+export const secondPassMinutes = (config) => secondPassWait(config) + 2 * (config.factory.commandTimeoutMinutes ?? 20) + (config.factory.agentTimeoutMinutes ?? 25)
+
+// Default: the work step's 165 minutes minus the 10 that check-setup.mjs keeps spare.
+export const runBudgetMinutes = (config) => config.factory.runBudgetMinutes ?? 155

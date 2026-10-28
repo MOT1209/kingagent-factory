@@ -10,8 +10,8 @@
 import { Box } from "@upstash/box"
 import { loadConfig } from "../src/config.mjs"
 import { getWorkerStates } from "../src/workers.mjs"
-import { sh, q, isRunLabel } from "../src/box.mjs"
-import { secretPaths } from "../src/agents.mjs"
+import { isRunLabel } from "../src/box.mjs"
+import { cleanAndFree } from "../src/recover.mjs"
 import { getWorkflowRun } from "../src/github.mjs"
 
 const config = loadConfig()
@@ -34,17 +34,12 @@ for (const label of runs) {
   }
 }
 
-// Clean up first and free the worker last, so no new run can claim the Box
-// while its sign-in folder is being deleted. A cancelled run never reached its
-// own cleanup.
-if (worker.boxStatus === "paused") await box.resume()
-await sh(box, `rm -rf ${secretPaths(config).map(q).join(" ")} ~/.git-credentials`, { allowFailure: true })
-console.log("Removed any sign-in files left by the interrupted run.")
-await box.labels.remove(config.factory.busyLabel)
-console.log(`Removed label ${config.factory.busyLabel}`)
-await box.pause().catch(() => {})
-for (const label of runs) {
-  await box.labels.remove(label)
-  console.log(`Removed label ${label}`)
+// Clean up first (and check it) and free the worker last, so no new run can
+// claim the Box while its sign-in folder is being deleted. A Box that still holds
+// the last job's files is not freed.
+const { freed, left } = await cleanAndFree(config, box, { paused: worker.boxStatus === "paused", labels: runs })
+if (!freed) {
+  console.error(`The Box could not be cleaned (${left.join(", ")}), so it was NOT freed. Fix it by hand (for example delete the Box and run provision-workers.mjs), then run this again.`)
+  process.exit(1)
 }
-console.log(`Worker ${worker.id} is free and its Box is paused.`)
+console.log(`Removed sign-in and work files. Worker ${worker.id} is free and its Box is paused.`)

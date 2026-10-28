@@ -41,3 +41,10 @@ export function trustedComments(comments, allowedActors) {
   const allowed = new Set(allowedActors.map((a) => a.toLowerCase()))
   return comments.filter((c) => c.author && allowed.has(c.author.toLowerCase()))
 }
+
+// Output of an agent that failed because of the provider, not because of the
+// task: a usage or rate limit, an overloaded service, a dropped connection.
+// Another agent type may well succeed where the same task cannot fail again
+// for the same reason. A real code or test failure never matches.
+const TRANSIENT_AGENT = /usage limit|weekly limit|rate.?limit|quota|too many requests|overloaded|at capacity|temporarily unavailable|try again (later|in)|\b(429|503|529)\b|ECONNRESET|ETIMEDOUT|socket hang up/i
+export const isTransientAgentFailure = (text) => TRANSIENT_AGENT.test(String(text ?? ""))

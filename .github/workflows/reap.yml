@@ -1,0 +1,40 @@
+name: Reap stale workers
+
+# Frees workers whose factory run GitHub reports as finished but that never
+# cleaned up (a lost runner, a hard timeout). Without this, such a worker waits
+# until the next issue starts a run. It touches only claims of finished runs, and
+# a claim whose run cannot be read is left alone (see src/recover.mjs).
+on:
+  schedule:
+    - cron: "17 */3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+# Never next to a factory run's own sweep for long: one sweep at a time.
+concurrency:
+  group: reap-stale
+  cancel-in-progress: false
+
+jobs:
+  reap:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      # No secrets in this step's environment: install scripts must never see them.
+      - run: npm ci
+      - name: Free workers left by finished runs
+        env:
+          UPSTASH_BOX_API_KEY: ${{ secrets.UPSTASH_BOX_API_KEY }}
+          FACTORY_GITHUB_TOKEN: ${{ secrets.FACTORY_GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/reap-stale.mjs

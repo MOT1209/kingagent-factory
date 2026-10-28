@@ -61,29 +61,34 @@ beforeEach(() => {
   git(seed, "push", "--quiet", remote, "HEAD:refs/heads/main")
   hosting.base = `file://${root}/remotes/`
   process.env.CLAUDE_CODE_OAUTH_TOKEN = CLAUDE
+  process.env.OPENCODE_AUTH_JSON = '{"token":"opencode-secret-token-789"}'
   ctx = { root, remote, seed }
 })
 
 // The real config, cut down to one claude worker and one repo, with fast
 // timeouts and a scripted agent instead of a real one.
-function setup({ agent = `printf 'hello\\n' >> README.md; echo "Appended hello to README.md." > {summary}`, checks = ["grep -q hello README.md"], setupCmds = ["true"], labels, configure } = {}) {
+function setup({ second = false, secondAgent = `printf 'hello\\n' >> README.md; echo "Appended by the second agent." > {summary}`, startedAt, clock, agent = `printf 'hello\\n' >> README.md; echo "Appended hello to README.md." > {summary}`, checks = ["grep -q hello README.md"], setupCmds = ["true"], labels, configure } = {}) {
   const config = load((c) => {
     c.factory.browser = false
     c.factory.waitForWorkerMinutes = 0.01
     c.factory.agentTimeoutMinutes = 0.1
     c.factory.commandTimeoutMinutes = 0.1
-    c.workers = [{ id: "claude-01", agent: "claude", enabled: true }]
+    c.workers = [{ id: "claude-01", agent: "claude", enabled: true }, ...(second ? [{ id: "opencode-01", agent: "opencode", enabled: true }] : [])]
+    // Claude first, so the first attempt is predictable.
+    if (second) Object.assign(c.agents.claude, { priority: 1 }), (c.agents.opencode.command = `: {prompt}; ${secondAgent}`)
     // The config requires {prompt} in the command; ":" makes it a no-op here.
     c.agents.claude.command = `: {prompt}; ${agent}`
     c.repos = [{ repo: REPO, baseBranch: "main", setup: setupCmds, checks, exclude: [] }]
     configure?.(c)
   })
   const box = localBox({ root: join(ctx.root, "box"), labels: [config.factory.boxLabel, "agent-claude"] })
+  const box2 = second ? localBox({ root: join(ctx.root, "box2"), id: "local-box-2", name: "kaf-opencode-01", labels: [config.factory.boxLabel, "agent-opencode"] }) : null
+  const boxes = [box, box2].filter(Boolean)
   const api = fakeApi(labels)
   const released = []
   const deps = {
-    getStates: async () => [{ ...config.workers[0], boxName: box.name, boxId: box.id, boxStatus: box.status, state: [...box.labelSet].some((l) => l === "busy" || l.startsWith("run-")) ? "busy" : "free", runs: [] }],
-    getBox: async () => box,
+    getStates: async () => boxes.map((b, i) => ({ ...config.workers[i], boxName: b.name, boxId: b.id, boxStatus: b.status, state: [...b.labelSet].some((l) => l === "busy" || l.startsWith("run-")) ? "busy" : "free", runs: [] })),
+    getBox: async (id) => boxes.find((b) => b.id === id),
     createBox: async () => assert.fail("no Box should be created"),
     sleep: async () => {},
     log: () => {},
@@ -100,11 +105,11 @@ function setup({ agent = `printf 'hello\\n' >> README.md; echo "Appended hello t
       token: TOKEN,
       redact: makeRedactor([TOKEN, CLAUDE]),
       api,
-      claimWorker: (cfg, labels, runId) => claimWorker(cfg, labels, runId, deps),
+      claimWorker: (cfg, labels, runId, extra) => claimWorker(cfg, labels, runId, { ...deps, ...extra }),
       releaseWorker: async (cfg, claim) => (released.push(claim.runLabel), releaseWorker(cfg, claim)),
       ...overrides,
     })
-  return { config, box, api, released, run }
+  return { config, box, box2, api, released, run }
 }
 
 const remoteBranch = () => spawnSync("git", ["ls-remote", ctx.remote, `refs/heads/${BRANCH}`], { encoding: "utf8" }).stdout.trim()
@@ -462,4 +467,95 @@ test("a summary file of gigabytes is read only up to a cap", async () => {
   assert.equal(await s.run(), "review")
   assert.ok(s.api.prs[0].body.length < 60_000)
   assert.ok(s.box.commands.some((c) => c.includes("head -c 200000")))
+})
+
+// --- fallback to another agent type when the provider reports a limit ---
+const LIMIT = `echo "Claude usage limit reached. Try again later."; exit 1`
+const bothPasses = async (s, info = {}) => {
+  const first = await s.run({ info })
+  if (first !== "retry-elsewhere") return { first, info }
+  return { first, second: await s.run({ info, continuing: true, excludeAgents: info.excludeAgents }), info }
+}
+
+test("a provider limit moves the issue to a worker of another agent type, once, and the PR is opened", async () => {
+  const s = setup({ second: true, agent: LIMIT, checks: ["grep -q hello README.md"] })
+  const r = await bothPasses(s)
+  assert.equal(r.first, "retry-elsewhere")
+  assert.equal(r.second, "review", lastComment(s.api))
+  assert.match(s.api.prs[0].body, /Appended by the second agent/)
+  assert.match(s.api.prs[0].body, /opencode/)
+  assert.equal(r.info.attempts, 2)
+  assert.deepEqual(factoryLabels(s.api), ["factory:review"])
+  for (const b of [s.box, s.box2]) {
+    assert.ok(![...b.labelSet].some((l) => l === "busy" || l.startsWith("run-")), `no claim left on ${b.name}`)
+    assert.equal(b.exists("/workspace/home/work"), false)
+    assert.deepEqual(grepTree(b.root, "opencode-secret-token-789"), [], `${b.name} holds no agent secret`)
+    assert.deepEqual(grepTree(b.root, CLAUDE), [], `${b.name} holds no agent secret`)
+  }
+  assert.ok(s.api.comments.some((c) => /Trying a worker of another agent type/.test(c.body)))
+})
+
+test("a real failure of the agent is NOT retried elsewhere", async () => {
+  const s = setup({ second: true, agent: `echo "SyntaxError: unexpected token"; exit 3` })
+  assert.equal(await s.run(), "needs-attention")
+  assert.deepEqual(factoryLabels(s.api), ["factory:needs-attention"])
+})
+
+test("an issue that asks for one agent type keeps it: no fallback", async () => {
+  const s = setup({ second: true, agent: LIMIT, labels: ["ready", "agent:claude"] })
+  assert.equal(await s.run(), "needs-attention")
+})
+
+test("no fallback when a whole second pass would not fit the run budget", async () => {
+  const start = Date.now()
+  const s = setup({ second: true, agent: LIMIT })
+  // The first attempt "ended" 3 hours after the run began.
+  assert.equal(await s.run({ startedAt: start - 180 * 60_000 }), "needs-attention")
+})
+
+test("fallback needs a second agent type to exist", async () => {
+  const s = setup({ agent: LIMIT })
+  assert.equal(await s.run(), "needs-attention")
+})
+
+test("second pass finds no free worker: the issue is handed to a person, not left running", async () => {
+  const s = setup({ second: true, agent: LIMIT })
+  s.box2.labelSet.add("busy")
+  const info = {}
+  assert.equal(await s.run({ info }), "retry-elsewhere")
+  assert.equal(await s.run({ info, continuing: true, excludeAgents: info.excludeAgents }), "needs-attention")
+  assert.deepEqual(factoryLabels(s.api), ["factory:needs-attention"])
+})
+
+test("a continuing pass refuses an issue this run does not own", async () => {
+  const s = setup({ second: true, labels: ["factory:running"] })
+  assert.equal(await s.run({ continuing: true, excludeAgents: ["claude"] }), "changed")
+  assert.equal(s.released.length, 0)
+})
+
+test("the job summary data names the worker, minutes and reason", async () => {
+  const s = setup({ checks: ["false"] })
+  const info = {}
+  assert.equal(await s.run({ info }), "needs-attention")
+  assert.equal(info.worker, "claude-01")
+  assert.ok(info.agentMinutes >= 0)
+  assert.match(info.reason, /did not pass/)
+})
+
+test("the second pass waits at most min(10, waitForWorkerMinutes) for a worker", async () => {
+  const s = setup({ second: true, agent: LIMIT })
+  const info = {}
+  assert.equal(await s.run({ info }), "retry-elsewhere")
+  const asked = []
+  const outcome = await s.run({ info, continuing: true, excludeAgents: info.excludeAgents, claimWorker: async (cfg, labels, id, extra) => (asked.push(extra.waitMinutes), null) })
+  assert.equal(outcome, "needs-attention")
+  assert.deepEqual(asked, [0.01])
+})
+
+test("the second pass gives its agent no second round after a failed check", async () => {
+  const s = setup({ second: true, agent: LIMIT, secondAgent: `echo run >> "$HOME/second-agent-runs"; echo x > {summary}`, checks: ["grep -q hello README.md"] })
+  const info = {}
+  assert.equal(await s.run({ info }), "retry-elsewhere")
+  assert.equal(await s.run({ info, continuing: true, excludeAgents: info.excludeAgents }), "needs-attention")
+  assert.equal(readFileSync(join(s.box2.home, "second-agent-runs"), "utf8").trim().split("\n").length, 1)
 })

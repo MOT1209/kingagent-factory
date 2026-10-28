@@ -4,12 +4,12 @@
 // Where each kind of work happens:
 //   runner (trusted, holds the GitHub token)  clone, branch check, apply, commit, push, GitHub API
 //   Box    (the agent's sandbox, no token)     repo setup, the agent, the checks, the patch
-import { findRepo } from "./config.mjs"
-import { runMark } from "./github.mjs"
+import { findRepo, secondPassMinutes, secondPassWait, runBudgetMinutes } from "./config.mjs"
+import { runMark, ownerRun } from "./github.mjs"
 import { sh, q, runScript, startBrowser, uploadBytes, downloadBytes } from "./box.mjs"
 import { signIn, writeJobFiles, writeRepoEnv, runAgent, endAgentSession, scrubBox, missingSecrets, REPO_ENV_FILE, WORK_DIR } from "./agents.mjs"
 import { transitions, applyTransition, takenByAnotherRun } from "./issue-state.mjs"
-import { factoryCommitMessage, protectedPaths, trustedComments } from "./guards.mjs"
+import { factoryCommitMessage, protectedPaths, trustedComments, isTransientAgentFailure } from "./guards.mjs"
 import * as gitHost from "./git-host.mjs"
 
 const NEEDS_CLARIFICATION = "NEEDS_CLARIFICATION:"
@@ -58,8 +58,14 @@ async function runCommands(box, kind, repoDir, jobDir, commands, timeoutMinutes)
 }
 
 // Returns the outcome as a word, for the tests and the log:
-//   skipped, owned, no-worker, changed, needs-attention, review
-export async function runIssue({ config, repoName, issueNumber, runId, runUrl, eventName, actor, token, redact, api, claimWorker, releaseWorker, git = gitHost }) {
+//   skipped, owned, no-worker, changed, needs-attention, review, retry-elsewhere
+//
+// `info` is filled in as the run goes (worker, agent, agent minutes, reason, PR)
+// for the job summary. "retry-elsewhere" means the agent failed because of its
+// provider (a usage limit, an overloaded service) while a whole second pass still
+// fits the run budget and another agent type has a worker: the worker is released
+// and the caller runs again with `continuing` and the agents in `excludeAgents`.
+export async function runIssue({ config, repoName, issueNumber, runId, runUrl, eventName, actor, token, redact, api, claimWorker, releaseWorker, git = gitHost, info = {}, continuing = false, excludeAgents = [], startedAt = Date.now(), clock = Date.now }) {
   const labels = config.labels
   const state = transitions(labels)
   const repo = findRepo(config, repoName)
@@ -87,19 +93,29 @@ export async function runIssue({ config, repoName, issueNumber, runId, runUrl, e
   const issue = await api.getIssue(repo.repo, issueNumber)
   const issueLabels = issue.labels.map((l) => l.name)
   console.log(`Issue ${repo.repo}#${issue.number}: ${issue.title}`)
-  if (issue.state !== "open" || !issueLabels.includes(labels.ready)) {
-    console.log(`Not open with the "${labels.ready}" label. Skipping.`)
-    return "skipped"
-  }
-  // A duplicate event, or a manual run next to a label run. A running label
-  // left behind by a killed run is cleared by scripts/recover-run.mjs.
-  if (takenByAnotherRun(issueLabels, labels)) {
-    console.log(`The issue already has "${labels.running}", so another run owns it. Skipping.`)
-    return "owned"
+  // A second pass of the same run finds the issue running, with this run's mark.
+  const ownedByThisRun = async (names) => names.includes(labels.running) && ownerRun(await api.listComments(repo.repo, issue.number)) === String(runId)
+  if (continuing) {
+    if (issue.state !== "open" || !(await ownedByThisRun(issueLabels))) {
+      console.log("The issue is no longer this run's. Leaving it alone.")
+      return "changed"
+    }
+  } else {
+    if (issue.state !== "open" || !issueLabels.includes(labels.ready)) {
+      console.log(`Not open with the "${labels.ready}" label. Skipping.`)
+      return "skipped"
+    }
+    // A duplicate event, or a manual run next to a label run. A running label
+    // left behind by a killed run is cleared by scripts/recover-run.mjs.
+    if (takenByAnotherRun(issueLabels, labels)) {
+      console.log(`The issue already has "${labels.running}", so another run owns it. Skipping.`)
+      return "owned"
+    }
   }
 
   // Reports a problem on the issue and hands it back to a human.
   const needsAttention = async (message) => {
+    info.reason = redact(message).split("\n")[0].slice(0, 300)
     await applyTransition(api, repo.repo, issue.number, state.needsAttention)
     await api.comment(repo.repo, issue.number, `${message}${runLink}`)
     console.log(`Issue labelled ${labels.needsAttention}.`)
@@ -113,7 +129,11 @@ export async function runIssue({ config, repoName, issueNumber, runId, runUrl, e
     return needsAttention(`The label \`agent:${forced}\` asks for an agent type that has no enabled worker. Remove or change that label, then add \`${labels.ready}\` again.`)
   }
 
-  const claim = await claimWorker(config, issueLabels, runId)
+  const claim = await claimWorker(config, issueLabels, runId, { excludeAgents, ...(continuing && { waitMinutes: secondPassWait(config) }) })
+  if (!claim && continuing) {
+    // The first attempt already moved the issue to running, so it must not stay there.
+    return needsAttention(`The ${excludeAgents.join(", ")} agent hit a provider limit and no worker of another agent type became free in time. Add \`${labels.ready}\` again to retry.${runLink}`)
+  }
   if (!claim) {
     // The issue keeps "ready", so the owner can see it never started.
     await api.comment(repo.repo, issue.number, `The factory had no free worker in time. Remove and re-add the \`${labels.ready}\` label to try again.${runLink}`)
@@ -121,6 +141,9 @@ export async function runIssue({ config, repoName, issueNumber, runId, runUrl, e
     return "no-worker"
   }
   const { worker, box } = claim
+  info.worker = worker.id
+  info.agent = worker.agent
+  info.attempts = continuing ? 2 : 1
   console.log(`Worker ${worker.id} (${worker.agent}) claimed. Box: ${worker.boxName} (${box.id})`)
 
   // Waiting for a worker can take minutes. Look at the issue again before
@@ -128,7 +151,8 @@ export async function runIssue({ config, repoName, issueNumber, runId, runUrl, e
   // or if it cannot be read: this run does not own it yet.
   const fresh = await api.getIssue(repo.repo, issue.number).catch((error) => (console.log(`Could not read the issue again: ${redact(error.message)}`), null))
   const freshLabels = fresh?.labels.map((l) => l.name) ?? []
-  if (!fresh || fresh.state !== "open" || !freshLabels.includes(labels.ready) || takenByAnotherRun(freshLabels, labels)) {
+  const stillAvailable = fresh && fresh.state === "open" && (continuing ? await ownedByThisRun(freshLabels) : freshLabels.includes(labels.ready) && !takenByAnotherRun(freshLabels, labels))
+  if (!stillAvailable) {
     console.log("The issue changed while this run waited for a worker. Leaving it alone.")
     await releaseWorker(config, claim)
     return "changed"
@@ -187,8 +211,18 @@ export async function runIssue({ config, repoName, issueNumber, runId, runUrl, e
     let result = await runAgent(box, config, worker.agent, { workDir: repoDir, jobDir, prompt: buildPrompt(repo, issue, comments), timeoutMinutes })
     await endAgentSession(box, config)
     console.log(`Agent finished in ${result.minutes} min with exit code ${result.code}.`)
+    info.agentMinutes = (info.agentMinutes ?? 0) + Number(result.minutes)
 
     if (result.code !== 0) {
+      // The provider, not the task: try another agent type, once, if a whole
+      // second pass still fits the run budget. An issue that asks for one
+      // agent type with a label keeps asking for it.
+      const elapsed = (clock() - startedAt) / 60000
+      if (!continuing && !forced && isTransientAgentFailure([result.summary, result.log].join("\n")) && elapsed + secondPassMinutes(config) <= runBudgetMinutes(config) && config.workers.some((w) => w.enabled && w.agent !== worker.agent)) {
+        await api.comment(repo.repo, issue.number, `The ${worker.agent} agent could not work on this (its provider reported a limit or an outage). Trying a worker of another agent type.${runLink}`)
+        info.excludeAgents = [...excludeAgents, worker.agent]
+        return "retry-elsewhere"
+      }
       // Agents that print their reply into {summary} also print their errors
       // there (a usage limit, a sign-in problem), so show both.
       return needsAttention(`The ${worker.agent} agent stopped with exit code ${result.code}.\n\n${details("Agent output", [result.summary, result.log].filter(Boolean).join("\n---\n"))}`)
@@ -202,7 +236,8 @@ export async function runIssue({ config, repoName, issueNumber, runId, runUrl, e
 
     console.log("\nRunning checks...")
     let checks = await runCommands(box, "checks", repoDir, jobDir, repo.checks, stepMinutes)
-    if (!checks.passed) {
+    // A second pass (after a provider limit) gets no second round: it must fit its budget.
+    if (!checks.passed && !continuing) {
       console.log(`Check failed: ${checks.command}. Giving the agent one chance to fix it.`)
       const extra = `\n# A check failed after your first attempt\n\nThe command \`${checks.command}\` failed with this output. Fix it.\n\n${checks.output.slice(-3000)}\n`
       await signIn(box, config, worker.agent)
@@ -244,6 +279,7 @@ export async function runIssue({ config, repoName, issueNumber, runId, runUrl, e
       body: `Closes #${issue.number}\n\n${summary || "(The agent gave no summary.)"}\n\n---\nBuilt by factory worker \`${worker.id}\` (${worker.agent}) in an Upstash Box. ${checkLine}${runUrl ? ` [Factory run](${runUrl}).` : ""}`,
     })
     console.log(`\nPull request: ${pr.html_url}`)
+    info.prUrl = pr.html_url
 
     await applyTransition(api, repo.repo, issue.number, state.review)
     await api.comment(repo.repo, issue.number, `Pull request ready for review: ${pr.html_url}`)

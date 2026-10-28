@@ -13,6 +13,20 @@ import { scrubBox } from "./agents.mjs"
 import { ownerRun } from "./github.mjs"
 import { transitions, applyTransition } from "./issue-state.mjs"
 
+// Cleans a claimed Box and frees it, in the order that keeps it safe: sign-in
+// and work files first (checked), then `busy`, then the given run labels. A Box
+// that still holds the last job's files is NOT freed, so nobody else can claim
+// it. `labels` are the run labels to remove at the end.
+export async function cleanAndFree(config, box, { paused = false, labels }) {
+  if (paused) await box.resume()
+  const left = await scrubBox(box, config)
+  if (left.length) return { freed: false, left }
+  await box.labels.remove(config.factory.busyLabel)
+  await box.pause().catch(() => {})
+  for (const label of labels) await box.labels.remove(label)
+  return { freed: true, left: [] }
+}
+
 export async function recoverRun(config, runId, { listBoxes, getBox, api, issue, runUrl, log = console.log }) {
   const runLabel = runLabelFor(runId)
   const held = (await listBoxes()).filter((b) => (b.labels ?? []).includes(runLabel))
@@ -31,21 +45,13 @@ export async function recoverRun(config, runId, { listBoxes, getBox, api, issue,
         log(`${data.name ?? data.id} no longer carries ${runLabel}. Left alone.`)
         continue
       }
-      if (data.status === "paused") await box.resume()
-      // Secrets first, then the labels, so no new run can claim a Box that
-      // still holds the last run's sign-in files.
       // The removal is checked: a Box that still holds the last job's files
       // keeps its labels, so nobody else can claim it.
-      const left = await scrubBox(box, config)
-      if (left.length) {
+      const { freed, left } = await cleanAndFree(config, box, { paused: data.status === "paused", labels: [runLabel] })
+      if (!freed) {
         log(`Could not clean ${data.name ?? data.id}: ${left.join(", ")}. It stays claimed. Clean it by hand, then free it with scripts/release-worker.mjs.`)
         continue
       }
-      // Same order as releaseWorker: busy, then the run label. While the run
-      // label is on, no other run can have claimed the Box, so its busy is ours.
-      await box.labels.remove(config.factory.busyLabel)
-      await box.pause().catch(() => {})
-      await box.labels.remove(runLabel)
       released.push(data.name ?? data.id)
       log(`Cleaned and released ${data.name ?? data.id}.`)
     } catch (error) {

@@ -116,3 +116,34 @@ test("recovery also removes the work folder, not just the sign-in files", async 
   await recoverRun(config, "571", { listBoxes: async () => [asListed(box)], getBox: async () => box, api: fakeGithub(), issue: null, log: quiet })
   assert.ok(box.commands.some((c) => c.includes("rm -rf") && c.includes("'/workspace/home/work'")))
 })
+
+import { cleanAndFree } from "../src/recover.mjs"
+
+test("cleanAndFree frees a clean Box: busy off, paused, run labels off", async () => {
+  const box = held("580")
+  const r = await cleanAndFree(config, box, { paused: false, labels: [runLabelFor("580")] })
+  assert.deepEqual(r, { freed: true, left: [] })
+  assert.ok(!box.labelSet.has(config.factory.busyLabel) && !box.labelSet.has(runLabelFor("580")))
+  assert.equal(box.status, "paused")
+})
+
+test("cleanAndFree resumes a paused Box before it cleans it", async () => {
+  const box = held("581")
+  box.status = "paused"
+  const order = []
+  const real = box.exec.command
+  box.exec.command = async (c) => (order.push(box.status), real(c))
+  await cleanAndFree(config, box, { paused: true, labels: [] })
+  assert.ok(order.length > 0 && order[0] === "running")
+})
+
+test("cleanAndFree refuses to free a Box it cannot clean (what release-worker.mjs relies on)", async () => {
+  const box = held("582")
+  const real = box.exec.command
+  box.exec.command = async (c) => (c.startsWith("( ls -d") ? { status: "completed", result: "/workspace/home/work\n__EXIT__0" } : real(c))
+  const r = await cleanAndFree(config, box, { labels: [runLabelFor("582")] })
+  assert.equal(r.freed, false)
+  assert.deepEqual(r.left, ["/workspace/home/work"])
+  assert.ok(box.labelSet.has(config.factory.busyLabel) && box.labelSet.has(runLabelFor("582")))
+  assert.equal(box.status, "running")
+})

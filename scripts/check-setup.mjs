@@ -6,7 +6,7 @@
 import { spawnSync } from "node:child_process"
 import { readFileSync } from "node:fs"
 import { Box } from "@upstash/box"
-import { loadConfig, usedAgents } from "../src/config.mjs"
+import { loadConfig, usedAgents, worstPassMinutes, secondPassMinutes, runBudgetMinutes } from "../src/config.mjs"
 import { readSecret } from "../src/agents.mjs"
 import { describeBoxSettings } from "../src/box.mjs"
 import { hintFor } from "../src/github.mjs"
@@ -144,7 +144,7 @@ if (config) {
 
   console.log("\nTimeouts")
   const f = config.factory
-  const worst = (f.waitForWorkerMinutes ?? 30) + 3 * (f.commandTimeoutMinutes ?? 20) + 2 * (f.agentTimeoutMinutes ?? 25)
+  const worst = worstPassMinutes(config)
   let workflowLimit = null
   try {
     // The tightest limit counts: the work step's own, which sits below the job's.
@@ -155,6 +155,10 @@ if (config) {
   if (!workflowLimit) note(`${sum}. Could not read timeout-minutes from the workflow`)
   else if (worst + 10 > workflowLimit) bad(`${sum}, but the workflow stops at ${workflowLimit}. A run killed by that limit skips its cleanup and leaves the worker busy. Raise timeout-minutes or lower the config timeouts`)
   else ok(`${sum}, inside the workflow's ${workflowLimit}`)
+  // A fallback to another agent type starts a second pass, but only when it still fits this budget.
+  const budget = runBudgetMinutes(config)
+  note(`Fallback to another agent type needs ${secondPassMinutes(config)} min for its pass (wait at most ${Math.min(10, f.waitForWorkerMinutes ?? 30)}, setup, one agent run, one round of checks) and starts only if that still ends inside ${budget} min of the run`)
+  if (workflowLimit && budget + 10 > workflowLimit) bad(`factory.runBudgetMinutes is ${budget}, but the workflow stops at ${workflowLimit}. A second pass after a provider limit must still finish with 10 minutes to spare. Lower runBudgetMinutes or raise timeout-minutes`)
 }
 
 console.log(problems ? `\n${problems} thing(s) to fix.` : "\nAll good.")
