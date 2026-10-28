@@ -7,7 +7,7 @@
     "status": "node --env-file=.env scripts/status.mjs",
     "plan": "node --env-file=.env src/plan.mjs",
     "test": "node --test test/*.test.mjs",
-    "check": "for f in src/*.mjs scripts/*.mjs; do node --check \"$f\" || exit 1; done && node --test test/*.test.mjs"
+    "check": "node scripts/check-all.mjs"
   },
   "dependencies": {
     "@upstash/box": "^0.7.5"

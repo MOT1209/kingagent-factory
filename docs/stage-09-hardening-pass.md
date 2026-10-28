@@ -63,3 +63,55 @@ tests against GitHub or Upstash.
    `check-setup.mjs --probe-writes` until it prints `All good.`
 3. Dry run through GitHub on a harmless issue; read the workflow log.
 4. One real run with `agent:opencode`; inspect the PR; do not merge blindly.
+
+## Verification with real credentials (2026-10-28)
+
+Run from a Windows machine with the real `.env` and a signed-in `gh`. Test
+target: `MOT1209/KingAgent` issue #19 ("append `hello` to README.md"), a
+harmless issue created for this purpose. No secret value was printed or
+committed; the three factory tokens were searched for in the run log and the
+PR and not found.
+
+### Executed and passed
+
+| Step | What ran | Result |
+| --- | --- | --- |
+| 2 | `node --env-file=.env scripts/check-setup.mjs --probe-writes` | exit 0, `All good.` Every write probe allowed on all three repos; Box key works, 8 spare slots. |
+| 3 | `gh variable set FACTORY_DRY_RUN --body true`; `scripts/set-secrets.mjs --yes` | exit 0. Four secrets on the factory repo, `FACTORY_GITHUB_TOKEN` on both app repos. |
+| 4 | Dry run through GitHub, once by `repository_dispatch` (run 40693579929) and once by `workflow_dispatch` (run 40698393846) | Plan named `MOT1209/KingAgent#19`, worker `opencode-01`, branch `factory/issue-19`, base `main`, then `Dry run only. Nothing was changed.` No branch, PR, comment or label change. |
+| 5 (claude) | Real run 40704150016 with `agent:claude` | Worker claimed, agent ran 0.7 min, three checks ran, one changed file (`README.md`), PR #20 against `main` with `+hello` only and one commit, issue `factory:review`, worker released, Box clean (no `.factory`, no work folder, no sign-in file left). |
+| 6 | Branch changed by a person (run 40705013040) | Refused: the person's commit `d7ee00c` was still the branch head, issue `factory:needs-attention`, comment says why, worker released. |
+| 6 | Duplicate dispatch (runs 40710401467 and 40710419924, seven seconds apart) | One claim and one PR (#22). The second run claimed nothing and skipped. |
+| 6 | Cancelled run: force-cancel of run 40728002485 mid-agent, then run 40728148915 | Worker stayed `busy` after the cancel. The next run's `reap-stale` recovered it ("Cleaned and released kaf-claude-01"), set `factory:needs-attention` with a clear comment. Both workers free afterwards. |
+
+### Executed and failed
+
+- **Step 5 with `agent:opencode`** (run 40698638895): failed after 30 minutes,
+  `"agent" did not finish within 30 minutes`. The cause is not the factory:
+  opencode's own log in the Box says `AI_APICallError: Free usage limit
+  reached` (the OpenCode Zen free tier), and opencode then kept retrying
+  instead of exiting. The factory handled the timeout correctly (issue
+  `factory:needs-attention`, comment, worker released, Box clean).
+
+### Application defects found and fixed
+
+1. `packRepo` wrote the archive to `C:\...\repo.tgz` and GNU tar read `C:` as a
+   remote host, so every run from a Windows machine failed at the Box handoff.
+   The archive now goes through stdout. Test:
+   `packRepo makes a tarball that unpacks to the same files`.
+2. `npm run check` used a POSIX `for` loop and failed under cmd.exe. It now runs
+   `scripts/check-all.mjs`. Test: `npm run check uses no POSIX shell syntax`.
+3. The test double `test/local-box.mjs` built Box paths with backslashes and
+   passed `C:/...` archive paths to GNU tar. It now uses forward slashes and
+   `--force-local` on Windows only.
+
+### Not executed
+
+- **Agent exits non-zero, agent timeout, a failing check** on GitHub. Each needs
+  a change to the factory's own configuration, which this pass was not allowed
+  to make. They remain covered only by the unit tests with stand-in agents. The
+  opencode run above did exercise the timeout path for real, by accident.
+- **opencode end to end**, until its free quota is available again.
+- **Idle-agent detection**: opencode sat for 30 minutes after a fatal provider
+  error. A faster stop would need the factory to read the agent's own log;
+  that was not built.
