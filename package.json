@@ -10,6 +10,6 @@
     "check": "node scripts/check-all.mjs"
   },
   "dependencies": {
-    "@upstash/box": "^0.7.5"
+    "@upstash/box": "^0.8.0"
   }
 }
