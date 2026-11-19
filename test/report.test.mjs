@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { summaryMarkdown, statsRecord, writeJobSummary } from "../src/report.mjs"
+import { summaryMarkdown, statsRecord, runRecord, writeRunRecord, writeJobSummary } from "../src/report.mjs"
 import { isTransientAgentFailure } from "../src/guards.mjs"
 import { pickWorker } from "../src/workers.mjs"
 import { worstPassMinutes, secondPassMinutes, secondPassWait, runBudgetMinutes } from "../src/config.mjs"
@@ -178,4 +178,23 @@ test("describeWorkers and advice point at what to do", async () => {
   assert.match(todo[1], /^b: a claim cannot be checked.*release-worker\.mjs b/)
   assert.match(todo[2], /^c: busy without any run label/)
   assert.deepEqual(advice(await describeWorkers([states[3]], async () => null)), [])
+})
+
+test("the run record is versioned, extends the stats line, and carries PR, reason and time", () => {
+  const now = new Date("2026-11-19T15:00:00Z")
+  const r = runRecord({ outcome: "review", repo: "o/r", issue: "7", runId: 99, runUrl: "https://x/run/99", now, info: { agent: "claude", worker: "claude-01", agentMinutes: 2.5, prUrl: "https://x/pull/3", excludeAgents: ["opencode"] } })
+  assert.deepEqual(r, { schema: 1, runId: "99", repo: "o/r", issue: 7, outcome: "review", agent: "claude", worker: "claude-01", agentMinutes: 2.5, attempts: 1, runUrl: "https://x/run/99", prUrl: "https://x/pull/3", reason: null, excludedAgents: ["opencode"], finishedAt: "2026-11-19T15:00:00.000Z" })
+  const bare = runRecord({ outcome: "skipped", repo: "o/r", issue: 7, runId: 1, now })
+  assert.equal(bare.prUrl, null)
+  assert.equal(bare.runUrl, null)
+  assert.deepEqual(bare.excludedAgents, [])
+})
+
+test("the run record is written only where FACTORY_RUN_RECORD points, and a write error never throws", () => {
+  const record = { schema: 1, runId: "1" }
+  assert.equal(writeRunRecord(record, undefined), false)
+  const writes = []
+  assert.equal(writeRunRecord(record, "/tmp/r.json", (f, t) => writes.push([f, t])), true)
+  assert.deepEqual(writes, [["/tmp/r.json", `${JSON.stringify(record, null, 2)}\n`]])
+  assert.equal(writeRunRecord(record, "/tmp/r.json", () => { throw new Error("disk full") }), false)
 })

@@ -1,7 +1,7 @@
 // What the operator sees without opening a log: a short Markdown block on the
 // workflow run's summary page, and a one-line JSON record of the run that a
 // later report can add up. Pure functions, so the tests need no workflow.
-import { appendFileSync } from "node:fs"
+import { appendFileSync, writeFileSync } from "node:fs"
 
 const OUTCOME_TEXT = {
   review: "Pull request opened. Review it; the factory never merges.",
@@ -39,6 +39,32 @@ export const statsRecord = ({ outcome, repo, issue, runId, info = {} }) => ({
   agentMinutes: Number((info.agentMinutes ?? 0).toFixed(2)),
   attempts: info.attempts ?? 1,
 })
+
+// The full, versioned record of one run, written as a JSON file (and uploaded as
+// an Actions artifact by factory.yml). It is the stats line plus the facts a
+// later store or dashboard needs. Every field is already masked by run.mjs; no
+// secret value ever goes in here.
+export const runRecord = ({ outcome, repo, issue, runId, runUrl, info = {}, now = new Date() }) => ({
+  schema: 1,
+  ...statsRecord({ outcome, repo, issue, runId, info }),
+  runUrl: runUrl ?? null,
+  prUrl: info.prUrl ?? null,
+  reason: info.reason ?? null,
+  excludedAgents: info.excludeAgents ?? [],
+  finishedAt: now.toISOString(),
+})
+
+// Writes the record where FACTORY_RUN_RECORD says. Without that variable (a run
+// from a laptop) nothing is written. A write failure never fails a run.
+export function writeRunRecord(record, file = process.env.FACTORY_RUN_RECORD, write = writeFileSync) {
+  if (!file) return false
+  try {
+    write(file, `${JSON.stringify(record, null, 2)}\n`)
+    return true
+  } catch {
+    return false
+  }
+}
 
 // Appends to the job summary file GitHub provides. Outside Actions there is
 // none, and this does nothing. A failure to write must never fail a run.

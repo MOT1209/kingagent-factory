@@ -8,7 +8,7 @@ import { claimWorker, releaseWorker } from "./box.mjs"
 import { secretValues } from "./agents.mjs"
 import { makeRedactor } from "./guards.mjs"
 import { runIssue } from "./pipeline.mjs"
-import { summaryMarkdown, statsRecord, writeJobSummary } from "./report.mjs"
+import { summaryMarkdown, statsRecord, runRecord, writeRunRecord, writeJobSummary } from "./report.mjs"
 
 const [repoName = process.env.FACTORY_REPO, issueNumber = process.env.FACTORY_ISSUE] = process.argv.slice(2)
 const runId = process.env.GITHUB_RUN_ID ?? `local${Date.now().toString().slice(-9)}`
@@ -50,11 +50,13 @@ try {
   const repoShown = findRepoName(config, repoName)
   writeJobSummary(summaryMarkdown({ outcome, repo: repoShown, issue: issueNumber, runUrl, info }))
   console.log(`::notice title=factory-stats::${JSON.stringify(statsRecord({ outcome, repo: repoShown, issue: issueNumber, runId, info }))}`)
+  writeRunRecord(runRecord({ outcome, repo: repoShown, issue: issueNumber, runId, runUrl, info }))
   console.log(`\nOutcome: ${outcome}`)
   // An issue handed back to a person, or never started, is not a success.
   if (outcome === "needs-attention" || outcome === "no-worker") process.exitCode = 1
 } catch (error) {
   console.error(`\nFactory run failed: ${redact(error.message)}`)
   writeJobSummary(`## Factory run\n\n**Failed**: ${redact(error.message).split("\n")[0].slice(0, 300)}\n`)
+  writeRunRecord(runRecord({ outcome: "error", repo: repoName ?? null, issue: issueNumber, runId, runUrl, info: { reason: redact(error.message).split("\n")[0].slice(0, 300) } }))
   process.exitCode = 1
 }
