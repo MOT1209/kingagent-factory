@@ -1,7 +1,7 @@
 // The whole issue-to-pull-request pipeline, run for real against a local Box
 // (real shell, real git, real background scripts), local bare repos standing in
 // for GitHub's git, and an in-memory GitHub API. No network, no credentials.
-import { test, beforeEach } from "node:test"
+import { test as nodeTest, beforeEach } from "node:test"
 import assert from "node:assert/strict"
 import { spawnSync } from "node:child_process"
 import { mkdtempSync, writeFileSync, chmodSync, readdirSync, readFileSync, statSync, mkdirSync } from "node:fs"
@@ -14,6 +14,14 @@ import { makeRedactor, isFactoryCommit } from "../src/guards.mjs"
 import { GitHubError } from "../src/github.mjs"
 import { load } from "./helpers.mjs"
 import { localBox } from "./local-box.mjs"
+
+// The local Box runs its background scripts with `nohup setsid` and /bin/kill
+// (src/box.mjs), the way a real Linux Box does. Git Bash on Windows has no
+// working equivalent: every "setup" step times out there, however long the
+// limit, so these tests cannot pass on Windows. Run them on Linux, in WSL, or
+// let CI do it. Everything else in `npm run check` still runs on Windows.
+const SKIP = process.platform === "win32" && "needs POSIX job control (setsid); run on Linux, WSL or in CI"
+const test = (name, fn) => nodeTest(name, { skip: SKIP }, fn)
 
 timing.pollMs = 50
 const TOKEN = "ghp_testtoken_never_in_the_box_123"
@@ -599,4 +607,36 @@ test("the prompt tells the agent about both ways to stop early", () => {
   const prompt = buildPrompt({ repo: REPO, checks: [] }, { number: 1, title: "t", body: "b" }, [])
   assert.match(prompt, /NEEDS_CLARIFICATION:/)
   assert.match(prompt, /NEEDS_SPLIT:/)
+})
+
+// The trigger fires on "ready", so an agent label added a moment later races with
+// the run's first read of the issue. A short settle time closes that window.
+test("an agent label added just after ready is honoured (settle window)", async () => {
+  const s = setup({ second: true, configure: (c) => (c.factory.agentLabelSettleSeconds = 5) })
+  const real = s.api.getIssue
+  let reads = 0
+  s.api.getIssue = async (...args) => {
+    const issue = await real(...args)
+    if (++reads > 1) issue.labels.push({ name: "agent:opencode" }) // arrives after the first read
+    return issue
+  }
+  let slept = 0
+  const info = {}
+  assert.equal(await s.run({ info, sleep: async (ms) => void (slept += ms) }), "review")
+  assert.equal(slept, 5000, "it waited the settle time once")
+  assert.equal(info.agent, "opencode", "the late agent label decided the worker")
+})
+
+test("no settle wait when an agent label is already there", async () => {
+  let slept = 0
+  const s = setup({ second: true, labels: ["ready", "agent:claude"], configure: (c) => (c.factory.agentLabelSettleSeconds = 5) })
+  assert.equal(await s.run({ sleep: async (ms) => void (slept += ms) }), "review")
+  assert.equal(slept, 0)
+})
+
+test("no settle wait when the setting is off", async () => {
+  let slept = 0
+  const s = setup({})
+  assert.equal(await s.run({ sleep: async (ms) => void (slept += ms) }), "review")
+  assert.equal(slept, 0)
 })

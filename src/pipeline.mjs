@@ -68,7 +68,7 @@ async function runCommands(box, kind, repoDir, jobDir, commands, timeoutMinutes)
 // provider (a usage limit, an overloaded service) while a whole second pass still
 // fits the run budget and another agent type has a worker: the worker is released
 // and the caller runs again with `continuing` and the agents in `excludeAgents`.
-export async function runIssue({ config, repoName, issueNumber, runId, runUrl, eventName, actor, token, redact, api, claimWorker, releaseWorker, git = gitHost, info = {}, continuing = false, excludeAgents = [], startedAt = Date.now(), clock = Date.now }) {
+export async function runIssue({ config, repoName, issueNumber, runId, runUrl, eventName, actor, token, redact, api, claimWorker, releaseWorker, git = gitHost, info = {}, continuing = false, excludeAgents = [], startedAt = Date.now(), clock = Date.now, sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)) }) {
   const labels = config.labels
   const state = transitions(labels)
   const repo = findRepo(config, repoName)
@@ -93,8 +93,8 @@ export async function runIssue({ config, repoName, issueNumber, runId, runUrl, e
   // so "1/../../x" or "1?x" must stop here, not be sent.
   if (!/^[1-9]\d{0,9}$/.test(String(issueNumber))) throw new Error(`"${String(issueNumber).slice(0, 40)}" is not an issue number.`)
 
-  const issue = await api.getIssue(repo.repo, issueNumber)
-  const issueLabels = issue.labels.map((l) => l.name)
+  let issue = await api.getIssue(repo.repo, issueNumber)
+  let issueLabels = issue.labels.map((l) => l.name)
   console.log(`Issue ${repo.repo}#${issue.number}: ${issue.title}`)
   // A second pass of the same run finds the issue running, with this run's mark.
   const ownedByThisRun = async (names) => names.includes(labels.running) && ownerRun(await api.listComments(repo.repo, issue.number)) === String(runId)
@@ -113,6 +113,25 @@ export async function runIssue({ config, repoName, issueNumber, runId, runUrl, e
     if (takenByAnotherRun(issueLabels, labels)) {
       console.log(`The issue already has "${labels.running}", so another run owns it. Skipping.`)
       return "owned"
+    }
+    // The trigger fires on "ready", so a person who adds "agent:<name>" a moment
+    // AFTER "ready" would race with this read. With no agent label yet, wait a
+    // short settle time and read the issue again, so a late label still counts.
+    // Off unless factory.agentLabelSettleSeconds is set.
+    const settle = config.factory.agentLabelSettleSeconds ?? 0
+    if (settle > 0 && !issueLabels.some((l) => l.startsWith("agent:"))) {
+      console.log(`No agent label yet. Waiting ${settle} s in case one is being added.`)
+      await sleep(settle * 1000)
+      issue = await api.getIssue(repo.repo, issueNumber)
+      issueLabels = issue.labels.map((l) => l.name)
+      if (issue.state !== "open" || !issueLabels.includes(labels.ready)) {
+        console.log(`Not open with the "${labels.ready}" label any more. Skipping.`)
+        return "skipped"
+      }
+      if (takenByAnotherRun(issueLabels, labels)) {
+        console.log(`The issue already has "${labels.running}", so another run owns it. Skipping.`)
+        return "owned"
+      }
     }
   }
 

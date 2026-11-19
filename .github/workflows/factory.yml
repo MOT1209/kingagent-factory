@@ -40,11 +40,11 @@ jobs:
       FACTORY_REPO: ${{ github.event.client_payload.repo || inputs.repo }}
       FACTORY_ISSUE: ${{ github.event.client_payload.issue || inputs.issue }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           # The workflow never pushes to this repo, so its token stays out of .git.
           persist-credentials: false
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: 24
           cache: npm
@@ -86,7 +86,18 @@ jobs:
           # naming the missing secret.
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           OPENCODE_AUTH_JSON: ${{ secrets.OPENCODE_AUTH_JSON }}
+          # Where src/run.mjs writes the run's JSON record (src/report.mjs runRecord).
+          FACTORY_RUN_RECORD: ${{ runner.temp }}/factory-run.json
         run: node src/run.mjs
+      # The record of this run, kept for 90 days. No secret values are in it.
+      - name: Keep the run record
+        if: always() && vars.FACTORY_DRY_RUN != 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: factory-run-${{ github.run_id }}
+          path: ${{ runner.temp }}/factory-run.json
+          if-no-files-found: ignore
+          retention-days: 90
       # Runs when the work step failed, timed out or was cancelled. It only acts on
       # a Box that still carries this run's label, so after a clean failure (which
       # releases its own worker) it does nothing.
