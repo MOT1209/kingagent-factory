@@ -87,6 +87,9 @@ function setup({ second = false, secondAgent = `printf 'hello\\n' >> README.md; 
     // The config requires {prompt} in the command; ":" makes it a no-op here.
     c.agents.claude.command = `: {prompt}; ${agent}`
     c.repos = [{ repo: REPO, baseBranch: "main", setup: setupCmds, checks, exclude: [] }]
+    // The real config waits a few seconds for a late agent label. Tests must not,
+    // unless they ask for it with `configure`.
+    delete c.factory.agentLabelSettleSeconds
     configure?.(c)
   })
   const box = localBox({ root: join(ctx.root, "box"), labels: [config.factory.boxLabel, "agent-claude"] })
