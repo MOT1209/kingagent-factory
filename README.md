@@ -2,7 +2,7 @@
 
 Put a `ready` label on a GitHub issue in an app repo. A coding agent picks it up inside an Upstash Box, makes the change, runs the repo's checks and opens a pull request. You review it and merge it yourself. The factory never merges.
 
-Repos, workers and agent types are listed in [factory.config.json](factory.config.json). The stage reports in [docs/](docs/) record what was set up and tested so far. **Status:** the whole pipeline is covered by automated tests against a local stand-in for the Box and GitHub, but no real issue has gone through it yet (see [Known limitations](#known-limitations)).
+Repos, workers and agent types are listed in [factory.config.json](factory.config.json). The stage reports in [docs/](docs/) record what was set up and tested so far. **Status:** the whole pipeline is covered by automated tests against a local stand-in for the Box and GitHub, and has completed real runs on GitHub (see [Known limitations](#known-limitations)).
 
 ## How a run works
 
@@ -274,9 +274,7 @@ Reviewed before a push: more than 100 files or 5,000 changed lines (per repo: `l
 - **Processes that escape the job folder.** The cleanup kills processes whose working directory is inside the job folder. A process that changes its directory and detaches (`setsid`) is out of reach, because the Box has no process namespace the factory controls and killing by user would also kill the Box's own services. It can read what the *next* job writes as the same user. The control that closes this is a fresh Box (or a Box restart that clears processes) per job; until Upstash offers it, only add agents you trust to workers that share a Box with other jobs.
 - **Actions are pinned to major tags** (`actions/checkout@v4`, `actions/setup-node@v4`), not to commit SHAs. They are GitHub's own actions; pinning to SHAs needs the SHAs looked up on GitHub, which this repo's tooling cannot do offline. Do it with Dependabot or by hand.
 
-- **No end-to-end run has happened.** The Factory workflow has never run on GitHub. Blockers that need the owner are in [docs/stage-08-production-readiness.md](docs/stage-08-production-readiness.md).
-- **Claude has not completed a run.** Its smoke test hit the subscription's weekly limit ([docs/stage-04-smoke-tests.md](docs/stage-04-smoke-tests.md)). OpenCode passed its smoke test.
-- **Tested only locally:** the Box file transfers (`files.write` and `files.read` in base64, with offsets), the git header authentication against github.com, and the `--probe-writes` interpretation. They follow the SDK's types and GitHub's documented behaviour, but have not run against the real services. The checksums make a broken transfer fail loudly rather than silently.
+- **Real runs so far are few.** A real Claude run on GitHub opened PR #20 on KingAgent, and the refusal, duplicate-dispatch and cancel-and-recover paths behaved as designed ([docs/stage-09-hardening-pass.md](docs/stage-09-hardening-pass.md), "Verification with real credentials"). The OpenCode run failed on its free-tier limit, not on a factory fault. Subscription and free-tier limits can still stop a run.
 - **The claim's safety rests on Upstash** answering label lists consistently, as above. That is assumed, not verified.
 - **Only GitHub Actions runs can be recovered automatically.** A run started from a laptop holds its worker until `release-worker.mjs --force`.
 - **Concurrent box creation.** If two runs create the same missing worker Box at once, two Boxes with one name can exist. Create workers ahead of time with `provision-workers.mjs`.
