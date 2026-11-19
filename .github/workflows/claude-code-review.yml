@@ -12,6 +12,8 @@ on:
 
 jobs:
   claude-review:
+    # Only the people who may start the factory. This repo holds the factory's secrets.
+    if: contains(fromJSON('["MOT1209"]'), github.actor)
     # Optional: Filter by PR author
     # if: |
     #   github.event.pull_request.user.login == 'external-contributor' ||

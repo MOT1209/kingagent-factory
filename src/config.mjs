@@ -63,7 +63,7 @@ export function loadConfig(file = CONFIG_FILE) {
   }
   if (!config.factory.boxNamePrefix || !/^[a-z0-9-]+$/.test(config.factory.boxNamePrefix)) errors.push(`factory.boxNamePrefix "${config.factory.boxNamePrefix}" must be lowercase letters, digits and dashes`)
 
-  for (const key of ["waitForWorkerMinutes", "agentTimeoutMinutes", "commandTimeoutMinutes", "imageBuildTimeoutMinutes", "boxLimit", "runBudgetMinutes", "agentLabelSettleSeconds"]) {
+  for (const key of ["waitForWorkerMinutes", "agentTimeoutMinutes", "commandTimeoutMinutes", "imageBuildTimeoutMinutes", "boxLimit", "runBudgetMinutes", "agentLabelSettleSeconds", "maxConcurrentRuns"]) {
     const value = config.factory[key]
     if (value !== undefined && !(Number.isFinite(value) && value > 0)) errors.push(`factory.${key} must be a positive number`)
   }

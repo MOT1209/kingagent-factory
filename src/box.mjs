@@ -221,7 +221,11 @@ export async function claimWorker(config, issueLabels, runId, deps = {}) {
 
   for (let attempt = 0; Date.now() < deadline; attempt++) {
     const spread = Number(String(runId).replace(/\D/g, "").slice(-6)) + attempt
-    const worker = pickWorker(await getStates(config), issueLabels, spread, config.agents, excludeAgents)
+    const states = await getStates(config)
+    // factory.maxConcurrentRuns caps how many workers may be held at once, below the pool size.
+    const cap = config.factory.maxConcurrentRuns
+    const atCap = cap !== undefined && states.filter((w) => w.state === "busy").length >= cap
+    const worker = atCap ? null : pickWorker(states, issueLabels, spread, config.agents, excludeAgents)
     if (!worker) {
       // A worker is freed by another run at an unpredictable moment; polling every
       // 10-15 s (jittered, so waiting runs do not all ask at once) finds it sooner

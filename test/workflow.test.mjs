@@ -69,3 +69,10 @@ test("dependabot watches Actions and npm", () => {
   assert.match(d, /package-ecosystem: github-actions/)
   assert.match(d, /package-ecosystem: npm/)
 })
+
+test("both Claude workflows start only for allowed actors, and CI audits dependencies", () => {
+  for (const f of ["claude.yml", "claude-code-review.yml"]) {
+    assert.match(readFileSync(new URL(`../.github/workflows/${f}`, import.meta.url), "utf8"), /contains\(fromJSON\('\["MOT1209"\]'\), github\.actor\)/, f)
+  }
+  assert.match(readFileSync(new URL("../.github/workflows/test.yml", import.meta.url), "utf8"), /npm audit --omit=dev --audit-level=high/)
+})
