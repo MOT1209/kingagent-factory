@@ -10,23 +10,33 @@
 //
 // Preview: node --env-file=.env scripts/set-secrets.mjs
 // Apply:   node --env-file=.env scripts/set-secrets.mjs --yes
+//
+// Only some repos: add --only owner/name[,owner/name]. Then only those app
+// repos get FACTORY_GITHUB_TOKEN (and their own repo secrets); the factory
+// repo's secrets are left alone unless --include-factory is also given.
+// A flaky connection (TLS handshake timeout, a 502) is retried up to three
+// times; a permission error is not.
 import { spawnSync } from "node:child_process"
 import { loadConfig } from "../src/config.mjs"
 import { readSecret } from "../src/agents.mjs"
+import { selectRepos, withRetry } from "../src/admin.mjs"
 
 const config = loadConfig()
 const apply = process.argv.includes("--yes")
+const { repos, only } = selectRepos(config.repos, process.argv.slice(2))
+const withFactory = !only || process.argv.includes("--include-factory")
 const usedAgents = new Set(config.workers.filter((w) => w.enabled).map((w) => w.agent))
 
-const plan = [
-  [config.factory.repo, "UPSTASH_BOX_API_KEY", process.env.UPSTASH_BOX_API_KEY],
-  [config.factory.repo, "FACTORY_GITHUB_TOKEN", process.env.FACTORY_GITHUB_TOKEN],
-]
-for (const [name, agent] of Object.entries(config.agents)) {
-  if (!usedAgents.has(name)) continue // no enabled worker uses this agent
-  for (const entry of agent.auth ?? []) plan.push([config.factory.repo, entry.secret, readSecret(entry)])
+const plan = []
+if (withFactory) {
+  plan.push([config.factory.repo, "UPSTASH_BOX_API_KEY", process.env.UPSTASH_BOX_API_KEY])
+  plan.push([config.factory.repo, "FACTORY_GITHUB_TOKEN", process.env.FACTORY_GITHUB_TOKEN])
+  for (const [name, agent] of Object.entries(config.agents)) {
+    if (!usedAgents.has(name)) continue // no enabled worker uses this agent
+    for (const entry of agent.auth ?? []) plan.push([config.factory.repo, entry.secret, readSecret(entry)])
+  }
 }
-for (const repo of config.repos) {
+for (const repo of repos) {
   plan.push([repo.repo, "FACTORY_GITHUB_TOKEN", process.env.FACTORY_GITHUB_TOKEN])
   // Secrets the repo's own tests need are used by the factory run, so they are
   // stored on the factory repo.
@@ -44,9 +54,14 @@ for (const [repo, name, value] of plan) {
     console.log(`Would set ${name} on ${repo} (${value.length} characters)`)
     continue
   }
-  const result = spawnSync("gh", ["secret", "set", name, "--repo", repo], { input: value, encoding: "utf8" })
-  if (result.status !== 0) {
-    console.error(`Failed to set ${name} on ${repo}: ${result.stderr}`)
+  try {
+    withRetry(() => {
+      const result = spawnSync("gh", ["secret", "set", name, "--repo", repo], { input: value, encoding: "utf8", timeout: 120_000 })
+      if (result.error?.code === "ETIMEDOUT") throw new Error("gh timed out after 120s")
+      if (result.status !== 0) throw new Error(result.stderr)
+    }, { log: console.log })
+  } catch (error) {
+    console.error(`Failed to set ${name} on ${repo}: ${error.message}`)
     process.exit(1)
   }
   console.log(`Set ${name} on ${repo}`)

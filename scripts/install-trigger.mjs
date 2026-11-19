@@ -6,6 +6,10 @@
 // Preview: node scripts/install-trigger.mjs
 // Apply:   node scripts/install-trigger.mjs --yes
 //
+// Only some repos: add --only owner/name[,owner/name]. A flaky connection (TLS
+// handshake timeout, a 502) is retried up to three times; every gh and git call
+// has a two-minute limit, so one hung call cannot stall the whole run.
+//
 // Uses the gh CLI and git. A pull request is used instead of a direct push so
 // the repo owner reviews what lands in their repo. Run it again after changing
 // allowedActors, the ready label, or the set of agent types.
@@ -14,16 +18,23 @@ import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { loadConfig, usedAgents } from "../src/config.mjs"
+import { selectRepos, withRetry } from "../src/admin.mjs"
 
 const config = loadConfig()
 const apply = process.argv.includes("--yes")
+const { repos } = selectRepos(config.repos, process.argv.slice(2))
 const BRANCH = "factory/install-trigger"
 const FILE = ".github/workflows/factory-ready.yml"
+const CALL_TIMEOUT_MS = 120_000
 
 function run(cmd, args, options = {}) {
-  const result = spawnSync(cmd, args, { encoding: "utf8", ...options })
-  if (result.status !== 0 && !options.allowFailure) throw new Error(`${cmd} ${args.join(" ")}\n${result.stderr}`)
-  return result.stdout.trim()
+  const once = () => {
+    const result = spawnSync(cmd, args, { encoding: "utf8", timeout: CALL_TIMEOUT_MS, ...options })
+    if (result.error?.code === "ETIMEDOUT") throw new Error(`${cmd} ${args.join(" ")}\ntimed out after ${CALL_TIMEOUT_MS / 1000}s`)
+    if (result.status !== 0 && !options.allowFailure) throw new Error(`${cmd} ${args.join(" ")}\n${result.stderr}`)
+    return result.stdout.trim()
+  }
+  return withRetry(once, { log: console.log })
 }
 
 const workflow = readFileSync(new URL("../templates/factory-ready.yml", import.meta.url), "utf8")
@@ -39,7 +50,7 @@ const labels = [
   ...usedAgents(config).map((name) => [`agent:${name}`, "5319E7", `Factory: use a ${name} worker`]),
 ]
 
-for (const { repo, baseBranch } of config.repos) {
+for (const { repo, baseBranch } of repos) {
   // GitHub only runs an issues workflow from the repo's DEFAULT branch, which is
   // not always the branch the factory opens its pull requests against.
   const defaultBranch = run("gh", ["repo", "view", repo, "--json", "defaultBranchRef", "-q", ".defaultBranchRef.name"])
