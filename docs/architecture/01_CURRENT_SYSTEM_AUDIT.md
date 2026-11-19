@@ -98,3 +98,44 @@ Status key: **I** implemented and tested, **P** partial, **M** missing.
 2. The Upstash label-consistency assumption under concurrent runs.
 3. Whether `claude.yml`/`claude-code-review.yml` can be triggered by non-collaborators on the factory repo.
 4. Cost per run (no data exists).
+
+---
+
+## 7. Revision 2 — 2026-11-19, `main` @ `6cb7693` (supersedes the numbers in §2 and the open items in §6)
+
+Includes merged PRs #16 (Phase 01 docs), #17 (README accuracy), #18 (admin scripts), #19 (Phase 02 fixes). Method: read every file in `src/`, `.github/workflows/`, `worker/`, `templates/`, `factory.config.json`; ran the tests locally; read CI results with `gh run view`; ran `npm audit`. No secret value was read or printed.
+
+### 7.1 Evidence refresh
+| Evidence | Result |
+|---|---|
+| Linux CI `Test`, run `44604013267` (push to `main`, Node 24) | `tests 181`, `pass 181`, `fail 0`, `skipped 0` |
+| Local Windows 11, Node 24.19, `npm test` on `main` | `tests 181`, `pass 129`, `fail 0`, `skipped 52`. The 52 are `test/pipeline.test.mjs`, skipped by design on `win32` (they need `setsid`; `pipeline.test.mjs:23-24`). This **closes F-Q1**: the earlier "129 vs 167" gap and the 23 timeouts were this, now an explicit documented decision |
+| Same suite on the pre-merge branch `phase02/factory-fixes` (local, under load) | `claim.test.mjs` "a race is usually won by someone, not lost by all" **failed once** (7/10). Passed on `main` and in CI. Its pass criterion is statistical (`claim.test.mjs:55-62`): finding **N6** |
+| `npm audit --omit=dev` | **1 high**: `zod`, transitive (via `@upstash/box`), "Zod can exhaust memory while validating oversized constrained collections"; fix available, **not applied** (closes the "severity not inspected" part of F-Q4) |
+| Real runs (from §2) | Unchanged; no new real run was started for this audit |
+
+### 7.2 Phase 02 delivery check (against 10's original T02 list)
+| Task | Status | Evidence |
+|---|---|---|
+| T02-1 README stale claims | Done | PR #17 |
+| T02-2 label-order race (F-D1) | **Mitigated, not eliminated** | `factory.agentLabelSettleSeconds: 8`; the run waits and re-reads when no `agent:*` label is present (`pipeline.mjs:121-135`). A label added later than the settle time is still missed |
+| T02-3 admin scripts `--only`, timeouts/retries (F-D5) | Done per merge `e110ada`, `src/admin.mjs`, `test/admin.test.mjs`; **not re-audited in depth here** | PR #18 |
+| T02-4 run record | Done | `report.mjs runRecord`; artifact step in `factory.yml` |
+| T02-5 Windows tests | Done as an OS decision (skip with reason) | see 7.1 |
+| T02-6 security quick wins | **Partial.** Actions pinned to SHAs: done (`factory.yml`, `test.yml`, `reap.yml`). `claude.yml` gated to the allowed actor: done. `claude-code-review.yml` has **no actor gate** and `id-token: write` (default `pull_request` trigger, so forks receive no secrets by default; exposure for same-repo branches **not reviewed in depth**). Token rotation: owner action, **no evidence it happened**. `zod` advisory open | workflows |
+| T02-7 per-repo/global caps (S8) | **Not delivered** — no cap keys exist in `config.mjs` | `config.mjs:66` key list |
+
+### 7.3 New findings for the expanded scope (master prompt of 2026-11-19)
+| ID | Finding | Evidence |
+|---|---|---|
+| N1 | **No Main Agent, no delegation, no sub-agent limit, no model selection exist.** One agent works one issue in one Box | `pipeline.mjs`; before Revision 2 no document mentioned them |
+| N2 | **No PowerShell anywhere.** Worker image is Debian 12 ARM64 | `worker/setup.sh` header; grep over `src/ worker/ scripts/` |
+| N3 | **Browser partially provisioned:** Box Chromium is enabled and started before the agent (`box.mjs:125-166`, `pipeline.mjs:231`; `docs/stage-04`/`stage-06` "Browser access: on"), but no automation tool (Playwright, agent-browser) is installed by the image and no run evidences a browser step | `worker/setup.sh`; grep |
+| N4 | **Model is the CLI default**, fixed per Box through `boxSettings` (a recorded owner choice), not per task | `factory.config.json agents.*.boxSettings`, `box.mjs:86-114` |
+| N5 | `runScript` returns only the last 80 log lines; no full-log artifact | `box.mjs:58` |
+| N7 | Earlier architecture documents placed Web and Desktop apps as phases 11–12; the owner has ruled them out of the current priority → **09 deferred, roadmap re-sequenced (10)** | owner instruction |
+| N8 | Effective parallelism is bounded by the static pool of **2 workers** (`boxLimit` 10) | `factory.config.json workers`, `config.mjs:146` |
+| N9 | No CPU/memory/process limits and no network egress policy in the repo; only wall-clock limits | grep for `ulimit`/egress: none |
+
+### 7.4 Could not be verified (stated, not assumed)
+Upstash label-list consistency under concurrent real runs; whether a Box can restrict egress; whether the pinned Claude Code/OpenCode CLIs accept a per-task model flag; PowerShell 7 and Playwright on the Debian 12 ARM64 image; Playwright-over-CDP against the managed Chromium; real cost per run (no data); the exposure of `claude-code-review.yml`; the Actions Windows-minute multiplier; behaviour of `src/admin.mjs` beyond its tests; token rotation.

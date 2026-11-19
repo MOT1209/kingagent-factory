@@ -63,7 +63,7 @@ Every tool/MCP call: `run_id, task_id, extension_id@version, tool, args_hash, si
 ## 7. Versioning and updates
 SemVer; a factory pins exact versions. Updates go through Validate → Quarantine → Evaluate → Approve. Rollback = re-pin the previous version (definitions in git, 03).
 
-## 8. Security requirements (acceptance for Phase 06)
+## 8. Security requirements (acceptance for Phase 08)
 - An imported skill containing an instruction to ignore rules does not change agent behaviour in the fixture suite (prompt-injection fixtures).
 - An MCP server cannot read another factory's data or any secret not granted.
 - A disabled extension cannot be called, even by a running task started earlier (checked per call).

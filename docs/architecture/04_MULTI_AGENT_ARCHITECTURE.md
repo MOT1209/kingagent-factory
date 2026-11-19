@@ -76,3 +76,9 @@ Each run emits `usage` and `outcome` (today's `factory-stats`, `report.mjs`). Ag
 
 ## 9. Anti-patterns avoided
 Agents messaging each other; shared mutable memory between roles; an agent choosing its own tools or permissions; an agent writing to the control plane.
+
+## 10. Main Agent, sub-agent limit and model authority (added 2026-11-19)
+- The **Main Agent** is the only supervising role. It proposes decomposition, roles and model tiers; the deterministic policy engine validates and enforces (13 §1).
+- **At most 4 sub-agents are active per parent task, enforced by the orchestrator** (atomic slot acquisition, leases, capability tokens). Sub-agents cannot create agents, delegate, or alter policy. Formal definition, mechanism and tests: **14**. This supersedes §5's "agents exchange contracts through the orchestrator" only by adding the limit; the contract model is unchanged.
+- **Only the Main Agent (or an authorised human override) assigns models and providers**, before execution, as recorded events: **15**. The role manifest's `provider.prefer` (§2) is therefore a *hint to the router*, not a choice the agent makes.
+- Real execution tiers (terminal, PowerShell, browser) a role may be granted: **16**.
