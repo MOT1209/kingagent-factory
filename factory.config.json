@@ -86,6 +86,62 @@
         "npm run typecheck"
       ],
       "exclude": []
+    },
+    {
+      "repo": "MOT1209/AgentWorld",
+      "baseBranch": "main",
+      "setup": ["npm ci"],
+      "checks": ["npm run typecheck", "npm run lint", "npm test"],
+      "exclude": []
+    },
+    {
+      "repo": "MOT1209/king3d-ai",
+      "baseBranch": "main",
+      "setup": ["npm ci"],
+      "checks": ["npm run typecheck", "npm test"],
+      "exclude": []
+    },
+    {
+      "repo": "MOT1209/Tarjim",
+      "baseBranch": "main",
+      "setup": ["npm ci"],
+      "checks": ["npm test", "npm run lint"],
+      "exclude": []
+    },
+    {
+      "repo": "MOT1209/KINGCODE-IDE",
+      "baseBranch": "main",
+      "setup": ["npm ci"],
+      "checks": ["npm test", "npm run lint"],
+      "exclude": []
+    },
+    {
+      "repo": "MOT1209/Cybersecurity-AI-Agent",
+      "baseBranch": "main",
+      "setup": ["npm ci"],
+      "checks": ["npm run lint", "npm test"],
+      "exclude": []
+    },
+    {
+      "repo": "MOT1209/rustgame",
+      "baseBranch": "main",
+      "setup": ["npm ci"],
+      "checks": ["npm run typecheck", "npm test"],
+      "exclude": []
+    },
+    {
+      "repo": "MOT1209/Lughati",
+      "baseBranch": "main",
+      "setup": ["npm ci"],
+      "checks": ["npm run typecheck", "npm test"],
+      "exclude": []
+    },
+    {
+      "repo": "MOT1209/Gym-app",
+      "baseBranch": "main",
+      "setup": ["npm install"],
+      "checks": ["npm test"],
+      "exclude": []
     }
   ],
   "workers": [
