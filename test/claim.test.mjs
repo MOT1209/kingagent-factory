@@ -52,14 +52,15 @@ test("many runs racing for the only worker: never two owners", async () => {
   }
 })
 
-test("a race is usually won by someone, not lost by all", async () => {
-  let won = 0
-  for (let round = 0; round < 10; round++) {
-    const { config, deps } = setup(onlyClaude)
-    const claims = await Promise.all(["4001", "4002"].map((id) => claimWorker(config, ["agent:claude"], id, deps)))
-    if (claims.some(Boolean)) won++
-  }
-  assert.ok(won >= 8, `only ${won}/10 races had a winner`)
+test("after a collision the run that backs off first wins, and the other stands down", async () => {
+  // Deterministic: run A retreats at once, run B only after 30 ms, so A's retry always comes first.
+  const { config, boxes, deps } = setup(onlyClaude)
+  const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+  const as = (ms) => ({ ...deps, sleep: () => wait(ms) })
+  const [a, b] = await Promise.all([claimWorker(config, ["agent:claude"], "4001", as(0)), claimWorker(config, ["agent:claude"], "4002", as(30))])
+  assert.ok(a, "A must hold the worker")
+  assert.equal(b, null, "B must not")
+  assert.deepEqual(runLabels(boxes[0]), [runLabelFor("4001")])
 })
 
 test("two workers, two racing runs: each gets its own", async () => {
@@ -119,4 +120,12 @@ test("a run waiting for a worker polls every 10-15 seconds, not every 30", async
   const result = await claimWorker(cfg, [], "9001", { getStates: async () => [], sleep: async (ms) => void waits.push(ms), log: () => {}, waitMinutes: 0.002 })
   assert.equal(result, null)
   assert.ok(waits.length >= 3 && waits.every((ms) => ms >= 10_000 && ms <= 15_000), waits.slice(0, 5).join(","))
+})
+
+test("factory.maxConcurrentRuns holds a run back while that many workers are busy", async () => {
+  const { config, boxes, deps } = setup((c) => (c.factory.maxConcurrentRuns = 1))
+  boxes[0].labelSet.add("run-1").add(config.factory.busyLabel)
+  const claim = await claimWorker(config, [], "6001", deps)
+  assert.equal(claim, null)
+  assert.ok(boxes.slice(1).every((b) => !b.labelSet.has("run-6001")), "no free worker may be touched")
 })
