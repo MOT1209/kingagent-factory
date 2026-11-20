@@ -13,6 +13,7 @@ import { factoryCommitMessage, protectedPaths, trustedComments, isTransientAgent
 import { buildPrBody } from "./pr-body.mjs"
 import * as gitHost from "./git-host.mjs"
 import { planSingleTask } from "./core/planner.mjs"
+import { classify, resolveModel } from "./core/router.mjs"
 
 const NEEDS_CLARIFICATION = "NEEDS_CLARIFICATION:"
 const NEEDS_SPLIT = "NEEDS_SPLIT:"
@@ -179,6 +180,13 @@ export async function runIssue({ config, repoName, issueNumber, runId, runUrl, e
   try {
     const planned = planSingleTask({ config, repo, issue, runId, forcedAgent: forced ?? null })
     emitEvent("task.state", { status: "running", worker: worker.id, agent: worker.agent, idempotencyKey: planned.idempotencyKey, attempt: continuing ? 2 : 1 })
+    // Phase 05 shadow routing (docs/architecture/15): record what the router
+    // would pick. The run still uses the claimed worker's agent and its default model.
+    if (config.factory.orchestration?.enabled === true) {
+      const route = classify(planned)
+      const model = resolveModel(config.factory.orchestration.registry, route.tier)
+      emitEvent("model.assign", { shadow: true, tier: route.tier, score: route.score, reasons: route.reasons, ...(model.ok ? { provider: model.provider, model: model.model } : { unresolved: model.reason }) })
+    }
   } catch {}
 
   // Waiting for a worker can take minutes. Look at the issue again before

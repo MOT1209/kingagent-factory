@@ -100,3 +100,17 @@ test("rejects unsafe base branches and malformed command lists", () => {
 test("rejects more workers than the Box limit", () => {
   assert.match(loadError((c) => (c.factory.boxLimit = 1)), /boxLimit/)
 })
+
+test("orchestration is optional, and a well-formed one loads", () => {
+  load((c) => delete c.factory.orchestration)
+  load((c) => (c.factory.orchestration = { enabled: true, registry: { tiers: { economical: [{ provider: "anthropic", model: "m", status: "verified" }] } } }))
+})
+
+test("rejects a malformed orchestration block, including unknown keys", () => {
+  for (const value of [null, [], "on"]) assert.match(loadError((c) => (c.factory.orchestration = value)), /factory.orchestration must be an object/)
+  assert.match(loadError((c) => (c.factory.orchestration = { enabled: "yes" })), /enabled must be true or false/)
+  assert.match(loadError((c) => (c.factory.orchestration = { enable: true })), /orchestration.enable is not a known setting/)
+  assert.match(loadError((c) => (c.factory.orchestration = { registry: [] })), /registry must be an object with a tiers object/)
+  assert.match(loadError((c) => (c.factory.orchestration = { registry: { tiers: { cheap: [] } } })), /tiers.cheap is not a tier/)
+  assert.match(loadError((c) => (c.factory.orchestration = { registry: { tiers: { balanced: [{ provider: "x" }] } } })), /tiers.balanced must be a list/)
+})

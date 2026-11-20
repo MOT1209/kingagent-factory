@@ -2,7 +2,8 @@
 // slice 1). Pure and deterministic: tiers come from structured facts (paths,
 // counts, role), never from the issue text, so an issue cannot talk its way to
 // a different model. No model id is hard-coded; a model is assignable only when
-// the registry says a probe verified it. Not wired into the pipeline yet.
+// the registry says a probe verified it. Wired into the pipeline in shadow mode
+// only (factory.orchestration.enabled): decisions are recorded, never applied.
 
 export const TIERS = ["economical", "balanced", "powerful", "advanced"]
 export const MAX_ESCALATIONS_PER_TASK = 2
