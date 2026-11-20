@@ -9,7 +9,7 @@ const run = (args) => {
   if (result.status !== 0) process.exit(result.status ?? 1)
 }
 
-for (const dir of ["src", "scripts"]) {
+for (const dir of ["src", "src/core", "scripts"]) {
   for (const file of readdirSync(new URL(`${dir}/`, root)).filter((f) => f.endsWith(".mjs"))) run(["--check", `${dir}/${file}`])
 }
 run(["--test", ...readdirSync(new URL("test/", root)).filter((f) => f.endsWith(".test.mjs")).map((f) => `test/${f}`)])
