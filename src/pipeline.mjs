@@ -12,6 +12,7 @@ import { transitions, applyTransition, takenByAnotherRun } from "./issue-state.m
 import { factoryCommitMessage, protectedPaths, trustedComments, isTransientAgentFailure, reviewChange } from "./guards.mjs"
 import { buildPrBody } from "./pr-body.mjs"
 import * as gitHost from "./git-host.mjs"
+import { planSingleTask } from "./core/planner.mjs"
 
 const NEEDS_CLARIFICATION = "NEEDS_CLARIFICATION:"
 const NEEDS_SPLIT = "NEEDS_SPLIT:"
@@ -57,7 +58,7 @@ async function runCommands(box, kind, repoDir, jobDir, commands, timeoutMinutes)
   for (const command of commands) console.log(`  $ ${command}`)
   const body = [`source ${REPO_ENV_FILE} 2>/dev/null || true`, `cd ${q(repoDir)} || exit 97`, ...commands.flatMap((command) => [`#STEP ${command}`, `${command} || exit $?`])]
   const result = await runScript(box, { name: kind, dir: jobDir, body, timeoutMinutes })
-  return { passed: result.code === 0, command: result.step, output: result.log }
+  return { passed: result.code === 0, code: result.code, command: result.step, output: result.log }
 }
 
 // Returns the outcome as a word, for the tests and the log:
@@ -68,11 +69,18 @@ async function runCommands(box, kind, repoDir, jobDir, commands, timeoutMinutes)
 // provider (a usage limit, an overloaded service) while a whole second pass still
 // fits the run budget and another agent type has a worker: the worker is released
 // and the caller runs again with `continuing` and the agents in `excludeAgents`.
-export async function runIssue({ config, repoName, issueNumber, runId, runUrl, eventName, actor, token, redact, api, claimWorker, releaseWorker, git = gitHost, info = {}, continuing = false, excludeAgents = [], startedAt = Date.now(), clock = Date.now, sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)) }) {
+export async function runIssue({ config, repoName, issueNumber, runId, runUrl, eventName, actor, token, redact, api, claimWorker, releaseWorker, git = gitHost, info = {}, emit = () => {}, continuing = false, excludeAgents = [], startedAt = Date.now(), clock = Date.now, sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)) }) {
   const labels = config.labels
   const state = transitions(labels)
   const repo = findRepo(config, repoName)
   if (!repo) throw new Error(`${repoName} is not in factory.config.json`)
+  // Events are observability only (docs/architecture/22): a failing emit never touches a run.
+  const taskId = `${repo.repo}#${issueNumber}@${runId}`
+  const emitEvent = (type, data = {}) => {
+    try {
+      emit({ type, taskId, project: repo.repo, actor: { type: "system" }, data })
+    } catch {}
+  }
   const details = (title, text) => `<details><summary>${title}</summary>\n\n\`\`\`\n${redact(text).slice(-3000)}\n\`\`\`\n\n</details>`
   const runLink = runUrl ? `\n\n[Factory run](${runUrl})` : ""
 
@@ -138,6 +146,7 @@ export async function runIssue({ config, repoName, issueNumber, runId, runUrl, e
   // Reports a problem on the issue and hands it back to a human.
   const needsAttention = async (message) => {
     info.reason = redact(message).split("\n")[0].slice(0, 300)
+    emitEvent("task.state", { status: "needs_input_or_failed", reason: info.reason })
     await applyTransition(api, repo.repo, issue.number, state.needsAttention)
     await api.comment(repo.repo, issue.number, `${message}${runLink}`)
     console.log(`Issue labelled ${labels.needsAttention}.`)
@@ -167,6 +176,10 @@ export async function runIssue({ config, repoName, issueNumber, runId, runUrl, e
   info.agent = worker.agent
   info.attempts = continuing ? 2 : 1
   console.log(`Worker ${worker.id} (${worker.agent}) claimed. Box: ${worker.boxName} (${box.id})`)
+  try {
+    const planned = planSingleTask({ config, repo, issue, runId, forcedAgent: forced ?? null })
+    emitEvent("task.state", { status: "running", worker: worker.id, agent: worker.agent, idempotencyKey: planned.idempotencyKey, attempt: continuing ? 2 : 1 })
+  } catch {}
 
   // Waiting for a worker can take minutes. Look at the issue again before
   // taking it, and leave it alone if a person or another run moved it meanwhile,
@@ -219,6 +232,7 @@ export async function runIssue({ config, repoName, issueNumber, runId, runUrl, e
     await writeRepoEnv(box, repo)
     const comments = trustedComments(await api.getHumanComments(repo.repo, issue.number), config.factory.allowedActors)
     const setup = await runCommands(box, "setup", repoDir, jobDir, repo.setup, stepMinutes)
+    emitEvent("step.result", { kind: "setup", command: setup.command ?? repo.setup.join(" && "), exit: setup.passed ? 0 : (setup.code ?? 1) })
     if (!setup.passed) {
       return needsAttention(`The repo's setup command \`${setup.command}\` failed in the worker Box, so the agent was not started. This is a factory or worker image problem, not a problem with the issue.\n\n${details("Setup output", setup.output)}`)
     }
@@ -272,6 +286,7 @@ export async function runIssue({ config, repoName, issueNumber, runId, runUrl, e
       await endAgentSession(box, config)
       checks = result.code === 0 ? await runCommands(box, "checks", repoDir, jobDir, repo.checks, stepMinutes) : checks
     }
+    emitEvent("step.result", { kind: "checks", command: checks.command ?? repo.checks.join(" && "), exit: checks.passed ? 0 : (checks.code ?? 1) })
     if (!checks.passed) {
       return needsAttention(`The change did not pass \`${checks.command}\`, so no pull request was opened.\n\n${details("Check output", checks.output)}`)
     }
@@ -290,10 +305,12 @@ export async function runIssue({ config, repoName, issueNumber, runId, runUrl, e
     console.log(`\nChanged files:\n${changed.join("\n")}`)
     const forbidden = protectedPaths(changed)
     if (forbidden.length) {
+      emitEvent("guard.hit", { guard: "protected-paths", files: forbidden.slice(0, 20) })
       return needsAttention(`The agent changed files the factory never pushes: ${forbidden.map((f) => `\`${f}\``).join(", ")}. Nothing was pushed. Make that change by hand, or reword the issue.`)
     }
     const stagedChanges = git.stagedChanges(checkout.dir)
     const verdict = reviewChange(stagedChanges, repo.limits)
+    if (verdict.refuse) emitEvent("guard.hit", { guard: "change-review", reason: verdict.refuse })
     if (verdict.refuse) return needsAttention(`${verdict.refuse} Nothing was pushed.`)
 
     const title = issue.title
@@ -308,6 +325,7 @@ export async function runIssue({ config, repoName, issueNumber, runId, runUrl, e
     })
     console.log(`\nPull request: ${pr.html_url}`)
     info.prUrl = pr.html_url
+    emitEvent("task.state", { status: "succeeded", prUrl: pr.html_url })
 
     await applyTransition(api, repo.repo, issue.number, state.review)
     await api.comment(repo.repo, issue.number, `Pull request ready for review: ${pr.html_url}`)

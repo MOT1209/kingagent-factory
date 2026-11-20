@@ -8,6 +8,7 @@ import { claimWorker, releaseWorker } from "./box.mjs"
 import { secretValues } from "./agents.mjs"
 import { makeRedactor } from "./guards.mjs"
 import { runIssue } from "./pipeline.mjs"
+import { makeEvent, appendEvent } from "./core/events.mjs"
 import { summaryMarkdown, statsRecord, runRecord, writeRunRecord, writeJobSummary } from "./report.mjs"
 
 const [repoName = process.env.FACTORY_REPO, issueNumber = process.env.FACTORY_ISSUE] = process.argv.slice(2)
@@ -40,6 +41,7 @@ try {
       claimWorker,
       releaseWorker,
       info,
+      emit: (event) => appendEvent(makeEvent({ ...event, runId, factory: config.factory.repo }, { redact })),
       startedAt,
       ...extra,
     })

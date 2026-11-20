@@ -88,6 +88,8 @@ jobs:
           OPENCODE_AUTH_JSON: ${{ secrets.OPENCODE_AUTH_JSON }}
           # Where src/run.mjs writes the run's JSON record (src/report.mjs runRecord).
           FACTORY_RUN_RECORD: ${{ runner.temp }}/factory-run.json
+          # One JSON event per line (src/core/events.mjs). No secret values.
+          FACTORY_EVENTS: ${{ runner.temp }}/factory-events.jsonl
         run: node src/run.mjs
       # The record of this run, kept for 90 days. No secret values are in it.
       - name: Keep the run record
@@ -95,7 +97,9 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: factory-run-${{ github.run_id }}
-          path: ${{ runner.temp }}/factory-run.json
+          path: |
+            ${{ runner.temp }}/factory-run.json
+            ${{ runner.temp }}/factory-events.jsonl
           if-no-files-found: ignore
           retention-days: 90
       # Runs when the work step failed, timed out or was cancelled. It only acts on
