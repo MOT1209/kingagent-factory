@@ -9,14 +9,17 @@ import { runMark, ownerRun } from "./github.mjs"
 import { sh, q, runScript, startBrowser, uploadBytes, downloadBytes } from "./box.mjs"
 import { signIn, writeJobFiles, writeRepoEnv, runAgent, endAgentSession, scrubBox, missingSecrets, REPO_ENV_FILE, WORK_DIR } from "./agents.mjs"
 import { transitions, applyTransition, takenByAnotherRun } from "./issue-state.mjs"
-import { factoryCommitMessage, protectedPaths, trustedComments, isTransientAgentFailure, reviewChange } from "./guards.mjs"
+import { factoryCommitMessage, protectedPaths, trustedComments, reviewChange } from "./guards.mjs"
 import { buildPrBody } from "./pr-body.mjs"
 import * as gitHost from "./git-host.mjs"
 import { planSingleTask } from "./core/planner.mjs"
 import { classify, resolveModel } from "./core/router.mjs"
+import { classifyProviderError } from "./core/providers.mjs"
 
 const NEEDS_CLARIFICATION = "NEEDS_CLARIFICATION:"
 const NEEDS_SPLIT = "NEEDS_SPLIT:"
+// How a fallback comment names a transient provider error.
+const PROVIDER_ERROR_TEXT = { quota: "a usage limit", rate_limit: "a rate limit", overloaded: "an outage or overload", network: "a dropped connection" }
 // GitHub refuses pull request bodies above 65536 characters.
 const MAX_SUMMARY = 50_000
 
@@ -257,13 +260,23 @@ export async function runIssue({ config, repoName, issueNumber, runId, runUrl, e
     console.log(`Agent finished in ${result.minutes} min with exit code ${result.code}.`)
     info.agentMinutes = (info.agentMinutes ?? 0) + Number(result.minutes)
 
+    // A typed provider error (docs/architecture/15 §4) of a failed agent attempt
+    // is recorded whether or not it leads to a fallback; the sink masks it.
+    const recordProviderError = (attempt) => {
+      if (attempt.code === 0) return null
+      const error = classifyProviderError([attempt.summary, attempt.log].join("\n"))
+      if (error) emitEvent("provider.error", { agent: worker.agent, kind: error.kind, transient: error.transient, match: error.match.slice(0, 200) })
+      return error
+    }
+
     if (result.code !== 0) {
+      const providerError = recordProviderError(result)
       // The provider, not the task: try another agent type, once, if a whole
       // second pass still fits the run budget. An issue that asks for one
       // agent type with a label keeps asking for it.
       const elapsed = (clock() - startedAt) / 60000
-      if (!continuing && !forced && isTransientAgentFailure([result.summary, result.log].join("\n")) && elapsed + secondPassMinutes(config) <= runBudgetMinutes(config) && config.workers.some((w) => w.enabled && w.agent !== worker.agent)) {
-        await api.comment(repo.repo, issue.number, `The ${worker.agent} agent could not work on this (its provider reported a limit or an outage). Trying a worker of another agent type.${runLink}`)
+      if (!continuing && !forced && providerError?.transient === true && elapsed + secondPassMinutes(config) <= runBudgetMinutes(config) && config.workers.some((w) => w.enabled && w.agent !== worker.agent)) {
+        await api.comment(repo.repo, issue.number, `The ${worker.agent} agent could not work on this (its provider reported ${PROVIDER_ERROR_TEXT[providerError.kind]}). Trying a worker of another agent type.${runLink}`)
         info.excludeAgents = [...excludeAgents, worker.agent]
         return "retry-elsewhere"
       }
@@ -292,6 +305,7 @@ export async function runIssue({ config, repoName, issueNumber, runId, runUrl, e
       await signIn(box, config, worker.agent)
       result = await runAgent(box, config, worker.agent, { workDir: repoDir, jobDir, prompt: buildPrompt(repo, issue, comments, extra), timeoutMinutes })
       await endAgentSession(box, config)
+      recordProviderError(result)
       checks = result.code === 0 ? await runCommands(box, "checks", repoDir, jobDir, repo.checks, stepMinutes) : checks
     }
     emitEvent("step.result", { kind: "checks", command: checks.command ?? repo.checks.join(" && "), exit: checks.passed ? 0 : (checks.code ?? 1) })

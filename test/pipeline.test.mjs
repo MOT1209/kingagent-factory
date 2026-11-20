@@ -692,3 +692,36 @@ test("events: shadow routing without a verified model says so and the run still 
   assert.equal(await s.run({ emit: (e) => events.push(e) }), "review")
   assert.match(events.find((e) => e.type === "model.assign").data.unresolved, /no models registered for tier/)
 })
+
+test("events: a provider limit is recorded as a typed provider.error, and the fallback comment names it", async () => {
+  const s = setup({ second: true, agent: LIMIT })
+  const events = []
+  assert.equal(await s.run({ emit: (e) => events.push(e) }), "retry-elsewhere")
+  const errors = events.filter((e) => e.type === "provider.error")
+  assert.equal(errors.length, 1)
+  assert.deepEqual({ ...errors[0].data, match: typeof errors[0].data.match }, { agent: "claude", kind: "quota", transient: true, match: "string" })
+  assert.match(lastComment(s.api), /its provider reported a usage limit/)
+})
+
+test("events: a sign-in failure is a typed provider.error but not transient, so there is no fallback", async () => {
+  const s = setup({ second: true, agent: `echo "Invalid API key · Please run /login"; exit 1` })
+  const events = []
+  assert.equal(await s.run({ emit: (e) => events.push(e) }), "needs-attention")
+  assert.deepEqual(events.filter((e) => e.type === "provider.error").map((e) => [e.data.kind, e.data.transient]), [["auth", false]])
+})
+
+test("events: a real task failure records no provider.error", async () => {
+  const s = setup({ agent: `echo "SyntaxError: unexpected token"; exit 3` })
+  const events = []
+  assert.equal(await s.run({ emit: (e) => events.push(e) }), "needs-attention")
+  assert.equal(events.some((e) => e.type === "provider.error"), false)
+})
+
+test("events: a provider error in the check-repair attempt is recorded too", async () => {
+  // First attempt succeeds but fails the check; the repair attempt hits a sign-in error.
+  const agent = `if grep -q 'A check failed' {prompt}; then echo "Invalid API key · Please run /login"; exit 1; else printf 'helo\n' > README.md; echo ok > {summary}; fi`
+  const s = setup({ agent })
+  const events = []
+  assert.equal(await s.run({ emit: (e) => events.push(e) }), "needs-attention")
+  assert.deepEqual(events.filter((e) => e.type === "provider.error").map((e) => [e.data.kind, e.data.transient]), [["auth", false]])
+})
