@@ -1,5 +1,6 @@
 // Small pure checks that keep a factory run safe. They live apart from run.mjs
 // so the tests can reach them without a Box or a GitHub token.
+import { classifyProviderError } from "./core/providers.mjs"
 
 // Every commit the factory pushes carries this trailer. A branch whose head
 // commit lacks it was pushed by a person, and the factory must not overwrite it.
@@ -45,9 +46,9 @@ export function trustedComments(comments, allowedActors) {
 // Output of an agent that failed because of the provider, not because of the
 // task: a usage or rate limit, an overloaded service, a dropped connection.
 // Another agent type may well succeed where the same task cannot fail again
-// for the same reason. A real code or test failure never matches.
-const TRANSIENT_AGENT = /usage limit|weekly limit|rate.?limit|quota|too many requests|overloaded|at capacity|temporarily unavailable|try again (later|in)|\b(429|503|529)\b|ECONNRESET|ETIMEDOUT|socket hang up/i
-export const isTransientAgentFailure = (text) => TRANSIENT_AGENT.test(String(text ?? ""))
+// for the same reason. A real code or test failure never matches. The typed
+// kinds live in core/providers.mjs (docs/architecture/15 §4).
+export const isTransientAgentFailure = (text) => classifyProviderError(text)?.transient === true
 
 // --- the shape of a change -------------------------------------------------
 // The host decides, from the staged diff, whether a change is reasonable to put
