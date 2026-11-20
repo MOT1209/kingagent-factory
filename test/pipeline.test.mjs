@@ -716,3 +716,12 @@ test("events: a real task failure records no provider.error", async () => {
   assert.equal(await s.run({ emit: (e) => events.push(e) }), "needs-attention")
   assert.equal(events.some((e) => e.type === "provider.error"), false)
 })
+
+test("events: a provider error in the check-repair attempt is recorded too", async () => {
+  // First attempt succeeds but fails the check; the repair attempt hits a sign-in error.
+  const agent = `if grep -q 'A check failed' {prompt}; then echo "Invalid API key · Please run /login"; exit 1; else printf 'helo\n' > README.md; echo ok > {summary}; fi`
+  const s = setup({ agent })
+  const events = []
+  assert.equal(await s.run({ emit: (e) => events.push(e) }), "needs-attention")
+  assert.deepEqual(events.filter((e) => e.type === "provider.error").map((e) => [e.data.kind, e.data.transient]), [["auth", false]])
+})

@@ -260,11 +260,17 @@ export async function runIssue({ config, repoName, issueNumber, runId, runUrl, e
     console.log(`Agent finished in ${result.minutes} min with exit code ${result.code}.`)
     info.agentMinutes = (info.agentMinutes ?? 0) + Number(result.minutes)
 
+    // A typed provider error (docs/architecture/15 §4) of a failed agent attempt
+    // is recorded whether or not it leads to a fallback; the sink masks it.
+    const recordProviderError = (attempt) => {
+      if (attempt.code === 0) return null
+      const error = classifyProviderError([attempt.summary, attempt.log].join("\n"))
+      if (error) emitEvent("provider.error", { agent: worker.agent, kind: error.kind, transient: error.transient, match: error.match.slice(0, 200) })
+      return error
+    }
+
     if (result.code !== 0) {
-      // A typed provider error (docs/architecture/15 §4) is recorded whether or
-      // not it leads to a fallback; the matched text is masked like every event.
-      const providerError = classifyProviderError([result.summary, result.log].join("\n"))
-      if (providerError) emitEvent("provider.error", { agent: worker.agent, kind: providerError.kind, transient: providerError.transient, match: providerError.match.slice(0, 200) })
+      const providerError = recordProviderError(result)
       // The provider, not the task: try another agent type, once, if a whole
       // second pass still fits the run budget. An issue that asks for one
       // agent type with a label keeps asking for it.
@@ -299,6 +305,7 @@ export async function runIssue({ config, repoName, issueNumber, runId, runUrl, e
       await signIn(box, config, worker.agent)
       result = await runAgent(box, config, worker.agent, { workDir: repoDir, jobDir, prompt: buildPrompt(repo, issue, comments, extra), timeoutMinutes })
       await endAgentSession(box, config)
+      recordProviderError(result)
       checks = result.code === 0 ? await runCommands(box, "checks", repoDir, jobDir, repo.checks, stepMinutes) : checks
     }
     emitEvent("step.result", { kind: "checks", command: checks.command ?? repo.checks.join(" && "), exit: checks.passed ? 0 : (checks.code ?? 1) })
