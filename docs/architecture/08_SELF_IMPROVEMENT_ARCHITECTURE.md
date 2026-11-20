@@ -57,8 +57,8 @@ Required approver by class: *instruction/skill text* → factory admin; *routing
 4. All steps are audited (07).
 5. A kill switch disables the improvement pipeline per factory without affecting normal runs.
 
-## 9. Acceptance (Phase 10)
+## 9. Acceptance (Phase 12)
 A seeded "bad" proposal (e.g. removes a rule) is rejected by the classifier or fails evaluation; a seeded "good" proposal passes, needs approval, canaries, and can be rolled back in one step; no run can change `stable` without an approval record.
 
-## 10. Prerequisites (why this is Phase 10, not earlier)
+## 10. Prerequisites (why this is Phase 12, not earlier)
 Run records and usage data (Phases 02–03), versioned definitions (05), evaluation fixtures and injection suite (07), the policy engine and approvals (03/07), and a frozen-task dataset — collecting real runs first is the long pole.

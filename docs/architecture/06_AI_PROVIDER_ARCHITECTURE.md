@@ -25,7 +25,7 @@ flowchart LR
 - `classifyFailure(output)` → `limit | outage | auth | task` (today the regex `isTransientAgentFailure`).
 - `usage(result)` → minutes, tokens/cost when the CLI/API exposes them, else `unknown` (never invented).
 
-Today's `agents.*` config entry **is** adapter v0; Phase 07 formalises it without breaking the config shape.
+Today's `agents.*` config entry **is** adapter v0; Phase 05 formalises it without breaking the config shape.
 
 ## 2. Model registry and capabilities
 A model is not assumed to support everything. Registry record:
@@ -69,5 +69,8 @@ Adapters isolate vendor specifics; the task contract is provider-neutral; sign-i
 ## 10. Security
 Provider credentials are per-factory secrets referenced by name; delivered only to the Box that runs that adapter; removed after the agent ends and verified (`agents.mjs:78-97`). Prompts and outputs are masked with the known-secret redactor before being stored or posted (`guards.mjs:27-36`). Data-policy fields prevent routing sensitive projects to providers that retain data.
 
-## 11. Acceptance (Phase 07)
+## 11. Acceptance (Phase 05)
 Adapter v0 reproduces today's behaviour on the existing fixtures; a third adapter can be added without changes outside `adapters/` and registry data; a forced budget exhaustion holds a task before any Box is claimed; usage records exist for 100% of runs.
+
+## 12. Complexity routing and authority (added 2026-11-19)
+Task-complexity classification, the rule that only the Main Agent assigns models, escalation and capability probing are specified in **15**. This document remains the reference for adapters, registries, usage, health and security.

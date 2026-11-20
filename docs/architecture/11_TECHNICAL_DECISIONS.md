@@ -76,3 +76,38 @@ Unchanged principle from the current README; extended to skills, MCP outputs and
 ## TD-14 Observability: append-only events + structured run records; no external APM initially
 - **Alternatives**: adopt an APM/tracing vendor now.
 - **Justification**: a table of run/usage/audit events satisfies every metric in the roadmap; add OpenTelemetry later if cross-service tracing is needed.
+
+---
+
+# Additions — 2026-11-19 (master engineering prompt)
+Format per decision: problem · existing solution · proposed · alternatives · pros · cons · migration impact · cost · security · maintenance.
+
+## TD-15 Defer the Web and Desktop applications **(owner decision, recorded)**
+- **Problem**: the earlier plan scheduled a Web Control Center and a Desktop app (phases 11–12 of the old roadmap). **Existing**: GitHub labels/comments, Actions summaries, CLI scripts — adequate for today's single operator.
+- **Proposed**: remove both from the critical path; keep 09 as a future note; keep the Core API UI-agnostic. **Supersedes the scheduling of TD-11 and TD-12** (their content stays valid if reversed).
+- **Alternatives**: build a read-only dashboard first. **Pros**: focus on the engine; no second product to secure. **Cons**: no visual monitoring; the operator relies on CLI/GitHub. **Migration**: none. **Cost**: saves UI build and upkeep. **Security**: removes a large attack surface for now. **Maintenance**: none.
+
+## TD-16 The Main Agent proposes; deterministic code validates and enforces
+- **Problem**: "central authority" must hold even if the Main Agent is manipulated by untrusted issue text. **Existing**: no Main Agent; policy is code (`guards.mjs`, `config.mjs`).
+- **Proposed**: an LLM-assisted Main Agent emits plans and tier requests; a deterministic policy engine and orchestrator validate every proposal and are the only writers of agent instances, models and budgets (13 §1).
+- **Alternatives**: fully LLM-controlled orchestration (rejected: not testable, injectable); fully static plans (rejected: no dynamic delegation). **Pros**: testable invariants; injection cannot raise limits. **Cons**: more code; planner flexibility limited to what policy allows. **Migration**: additive. **Cost**: engineering time; one extra LLM call per plan. **Security**: the key control on prompt-injection blast radius. **Maintenance**: policy tests.
+
+## TD-17 Slot ledger by atomic store operation, not by Box labels
+- **Problem**: enforce `active ≤ 4` per parent. **Existing**: worker claim via Box labels, correctness assumed (`box.mjs:198-203`, risk R-06).
+- **Proposed**: conditional update (compare-and-set) in the Core store + lease/heartbeat + reaper (14 §3). **Alternatives**: in-process semaphore (loses state on crash, single process only); label-based slots (same unverified assumption). **Pros**: provable under concurrency; survives restarts. **Cons**: needs the Phase 03 store first. **Migration**: interim = in-process semaphore + the existing `concurrency` group, behind the same interface. **Cost**: none beyond the store. **Security**: prevents resource exhaustion by forged spawns. **Maintenance**: the reaper.
+
+## TD-18 Per-task model assignment rendered by the orchestrator from a probe-verified registry
+- **Problem**: choose models per task without trusting agents or assuming availability. **Existing**: CLI default model fixed per Box by `boxSettings` (`box.mjs:86-114`).
+- **Proposed**: tier→model registry with `verified_at`; the orchestrator renders the agent command/settings per job; a capability probe extends `scripts/smoke-test.mjs` (15). **Alternatives**: keep per-Box models and route by Box (coarse, wastes Boxes); let the agent pick (violates M-1). **Pros**: auditable, cost-aware. **Cons**: depends on CLI support for per-job model selection (**unverified**). **Migration**: `boxSettings` stays as the default. **Cost**: probe quota. **Security**: an agent cannot influence its own model. **Maintenance**: re-probe on image rebuild.
+
+## TD-19 Windows execution: ephemeral GitHub-hosted `windows-latest` verifier; PowerShell 7 added to the Linux image
+- **Problem**: real PowerShell and Windows builds; Boxes are Linux ARM64. **Existing**: none.
+- **Proposed**: a verifier job (patch in, evidence out, no credentials) plus `pwsh` in `worker/setup.sh` (installation to be verified by the image's own check step) (16 §4). **Alternatives**: self-hosted Windows runner/VM (more control, more risk and operations); run everything on Windows (loses the Box isolation model). **Pros**: no new infrastructure, fresh VM per job. **Cons**: Actions minutes (Windows multiplier), cannot host the agent. **Migration**: a new workflow job; the existing flow is untouched. **Cost**: minutes (to be measured). **Security**: same credential boundary. **Maintenance**: runner image drift.
+
+## TD-20 Browser automation by Playwright over CDP to the Box's managed Chromium (fallback: Playwright-managed browser)
+- **Problem**: real browser testing. **Existing**: Chromium enabled and started, no automation tool installed (01 N3).
+- **Proposed**: Playwright connects over CDP to port 9222; a spike first, acceptance in 16 §8. **Alternatives**: `agent-browser` (mentioned in `box.mjs:154`, unverified), Puppeteer, a bundled Chromium in the image (bigger image). **Pros**: no browser download; standard API for screenshots, console and network. **Cons**: CDP-attach stability unverified; egress control unverified (a gate). **Migration**: the image gains a dependency. **Cost**: image size. **Security**: allow-list egress or the feature stays off. **Maintenance**: pin the Playwright version.
+
+## TD-21 Resolve the `zod` high advisory through a normal dependency PR
+- **Problem**: `npm audit --omit=dev` reports 1 high (transitive via `@upstash/box`). **Existing**: the lockfile resolves a vulnerable version; Dependabot watches npm.
+- **Proposed**: a lockfile update (`npm audit fix`) in a reviewed PR with the full tests; `overrides` only if upstream lags. **Alternatives**: accept the risk (exploitability for a CLI that validates SDK data was **not assessed in depth**). **Cost**: minutes. **Not applied in this assignment** (no dependency changes before approval).

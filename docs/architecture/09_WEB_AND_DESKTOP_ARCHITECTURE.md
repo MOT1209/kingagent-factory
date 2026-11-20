@@ -1,5 +1,7 @@
 # 09 — Web and Desktop Architecture
 
+> **DEFERRED (owner instruction, 2026-11-19).** A new Web or Desktop management application is **not part of the current priority**. This document is kept as a future-direction note only; it is not on the roadmap's critical path (10, "Deferred work"). Until reversed by the owner, interaction stays on GitHub issues/labels, Actions summaries and CLI scripts, and the Core API (13) is designed so that a UI could be added later without business logic in the client.
+
 Status: **proposal**. Today the only "UI" is GitHub (labels, comments, PRs), the Actions run summary (`report.mjs summaryMarkdown`), and CLI scripts (`scripts/status.mjs`, `doctor.mjs`). There is no API, server or client code in this repo.
 
 ## 1. Principle: one backend, thin clients

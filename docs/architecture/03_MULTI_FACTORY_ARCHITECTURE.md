@@ -68,7 +68,7 @@ Factories never call each other directly. The central orchestrator may hand a ta
 SemVer on definitions; the Core records `factory_version` on every run (analogue of today's `factory-stats` record, `report.mjs`). Skill and agent versions are pinned inside the definition.
 
 ## 8. Mapping today → first specialised factory
-Today's configuration becomes `factories/default` (or `web`) with no behaviour change. This is the Phase 05 starting point and the regression oracle: **the existing 167 tests and the real-run scenarios must pass unchanged against `factories/default`.**
+Today's configuration becomes `factories/default` (or `web`) with no behaviour change. This is the Phase 07 starting point and the regression oracle: **the existing 167 tests and the real-run scenarios must pass unchanged against `factories/default`.**
 
 ## 9. Risks specific to this design
 Cross-factory leakage (R-12), per-factory image sprawl and cost, and PAT-to-App migration blocking isolation (see 12).

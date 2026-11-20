@@ -90,3 +90,21 @@ Dependabot (exists) + `npm audit` in CI as a non-blocking report first; lockfile
 
 ## 6. Acceptance (Phase 13, with early items in Phase 02)
 Rotation drill passes; cross-factory negative tests pass; injection fixture suite stable; audit log complete for a scripted scenario; S1–S8 each closed or accepted in writing.
+
+---
+
+## 7. Addendum — controls for the expanded scope (2026-11-19)
+New findings: **S7 (Medium)** `zod` high advisory, transitive (TD-21). **S8** no per-repo/global caps (R-23, T02b-1). **S9 (Medium)** `claude-code-review.yml` has no actor gate and `id-token: write` (R-41). **S10 (Medium)** no CPU/memory/process limits and no egress policy for agent Boxes (01 N9). Detail in 01 §7.
+
+Controls introduced by documents 13–22 (all **proposals**, none implemented):
+| Area | Requirement | Where |
+|---|---|---|
+| Delegation | At most 4 active sub-agents per parent, enforced by an atomic slot ledger; sub-agents cannot spawn, delegate or alter policy; capability tokens | 14 |
+| Model authority | Only the Main Agent or an authorised admin assigns models/providers, before execution, as append-only events; agents cannot influence their own model | 15 |
+| Terminal authorization | Per-role tool and path grants; resource caps; full log artifacts | 16 §3 |
+| PowerShell authorization | Windows verifier receives patch-only input, no credentials, ephemeral VM; `pwsh` runs only inside sandboxes | 16 §4 |
+| Browser network restrictions | Localhost plus allow-list; if egress cannot be enforced, browser testing of untrusted content is **disabled** | 16 §5 |
+| Untrusted repositories | A repository, its instruction files, issue text, skills, MCP output and memory are data, never authority; analysis output schema-validated | 13, 19, 20 |
+| Approvals | Plans, factory activation, skill/MCP grants, improvements and every merge need a recorded human approval | 13 §4, 08 |
+| Anti-fabrication | A "verified" result exists only as a runner-recorded command, exit code and log hash | 17, 18 |
+| Audit | Append-only events for denials, assignments, slots, approvals | 22 §2 |

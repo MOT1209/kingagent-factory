@@ -105,8 +105,8 @@ Global factory → specialised factory → project → agent → task history �
 1. Keep `runIssue`; add run records (Phase 02).
 2. Extract a `TaskContract` and call `runIssue` as the `developer` executor (Phase 03/04).
 3. Introduce the store and API; GitHub stays as intake (Phase 03).
-4. Generalise `factory.config.json` into factory definitions (Phase 05).
-5. Add registry, router, memory, improvement, then UIs (Phases 06–12).
+4. Generalise `factory.config.json` into factory definitions (Phase 07).
+5. Add registry, router, memory, improvement, then UIs (Phases 05–13, see 10; UIs deferred, see 09).
 
 ## 9. Bottlenecks to watch (dependency map)
 `runIssue` (single function) → blocks roles/multi-step; `factory.config.json` (single file for all repos/agents/workers) → blocks multi-factory; worker pool in config → blocks concurrency growth; no store → blocks UI, budgets, memory, improvement. These four gate nearly everything; hence their position in the roadmap (10).
