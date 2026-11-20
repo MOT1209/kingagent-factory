@@ -668,3 +668,27 @@ test("events: a failing check is reported with its exit code before the hand-bac
   assert.ok(events.some((e) => e.type === "step.result" && e.data.kind === "checks" && e.data.exit !== 0))
   assert.ok(events.some((e) => e.type === "task.state" && e.data.status === "needs_input_or_failed"))
 })
+
+test("events: shadow routing is off by default and records nothing", async () => {
+  const s = setup()
+  const events = []
+  assert.equal(await s.run({ emit: (e) => events.push(e) }), "review")
+  assert.equal(events.some((e) => e.type === "model.assign"), false)
+})
+
+test("events: shadow routing records the router's pick without changing the run", async () => {
+  const s = setup({ configure: (c) => (c.factory.orchestration = { enabled: true, registry: { tiers: { economical: [{ provider: "p", model: "unverified", status: "probing" }, { provider: "p", model: "cheap", status: "verified" }] } } }) })
+  const events = []
+  assert.equal(await s.run({ emit: (e) => events.push(e) }), "review")
+  const assigned = events.filter((e) => e.type === "model.assign")
+  assert.equal(assigned.length, 1)
+  assert.deepEqual({ ...assigned[0].data, reasons: undefined }, { shadow: true, tier: "economical", score: 0, reasons: undefined, provider: "p", model: "cheap" })
+  assert.equal(events.find((e) => e.type === "task.state" && e.data.status === "running").data.agent, "claude")
+})
+
+test("events: shadow routing without a verified model says so and the run still succeeds", async () => {
+  const s = setup({ configure: (c) => (c.factory.orchestration = { enabled: true }) })
+  const events = []
+  assert.equal(await s.run({ emit: (e) => events.push(e) }), "review")
+  assert.match(events.find((e) => e.type === "model.assign").data.unresolved, /no models registered for tier/)
+})

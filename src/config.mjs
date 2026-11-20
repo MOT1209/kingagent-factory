@@ -2,9 +2,33 @@
 // described in the skill's references/config.md.
 import { existsSync, readFileSync } from "node:fs"
 import { pathToFileURL } from "node:url"
+import { TIERS as ROUTER_TIERS } from "./core/router.mjs"
 
 const CONFIG_FILE = new URL("../factory.config.json", import.meta.url)
 const MAX_LABEL_LENGTH = 20 // Upstash Box label limit
+
+const isPlainObject = (value) => typeof value === "object" && value !== null && !Array.isArray(value)
+
+// factory.orchestration = { enabled?: boolean, registry?: { tiers: { <tier>: [{ provider, model, status }] } } }
+function orchestrationErrors(orchestration) {
+  if (orchestration === undefined) return []
+  if (!isPlainObject(orchestration)) return ["factory.orchestration must be an object"]
+  const errors = []
+  for (const key of Object.keys(orchestration)) {
+    if (!["enabled", "registry"].includes(key)) errors.push(`factory.orchestration.${key} is not a known setting (use enabled or registry)`)
+  }
+  if (orchestration.enabled !== undefined && typeof orchestration.enabled !== "boolean") errors.push("factory.orchestration.enabled must be true or false")
+  const registry = orchestration.registry
+  if (registry === undefined) return errors
+  if (!isPlainObject(registry) || !isPlainObject(registry.tiers)) return [...errors, "factory.orchestration.registry must be an object with a tiers object"]
+  for (const [tier, entries] of Object.entries(registry.tiers)) {
+    if (!ROUTER_TIERS.includes(tier)) errors.push(`factory.orchestration.registry.tiers.${tier} is not a tier (${ROUTER_TIERS.join(", ")})`)
+    else if (!Array.isArray(entries) || !entries.every((e) => isPlainObject(e) && typeof e.provider === "string" && e.provider && typeof e.model === "string" && e.model && typeof e.status === "string")) {
+      errors.push(`factory.orchestration.registry.tiers.${tier} must be a list of { provider, model, status }`)
+    }
+  }
+  return errors
+}
 
 export function loadConfig(file = CONFIG_FILE) {
   const config = JSON.parse(readFileSync(file, "utf8"))
@@ -67,6 +91,9 @@ export function loadConfig(file = CONFIG_FILE) {
     const value = config.factory[key]
     if (value !== undefined && !(Number.isFinite(value) && value > 0)) errors.push(`factory.${key} must be a positive number`)
   }
+  // Phase 05 shadow routing: off unless explicitly enabled; it only records decisions.
+  // Unknown keys are refused so a typo such as "enable" cannot leave it silently off.
+  errors.push(...orchestrationErrors(config.factory.orchestration))
 
   // The four issue labels drive every state change, so each must be set and
   // none may double as another.
