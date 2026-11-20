@@ -643,3 +643,28 @@ test("no settle wait when the setting is off", async () => {
   assert.equal(await s.run({ sleep: async (ms) => void (slept += ms) }), "review")
   assert.equal(slept, 0)
 })
+
+test("events: a successful run emits running, step results with exit codes, and succeeded", async () => {
+  const s = setup()
+  const events = []
+  assert.equal(await s.run({ emit: (e) => events.push(e) }), "review")
+  const states = events.filter((e) => e.type === "task.state").map((e) => e.data.status)
+  assert.deepEqual(states, ["running", "succeeded"])
+  const steps = events.filter((e) => e.type === "step.result")
+  assert.ok(steps.some((e) => e.data.kind === "checks" && e.data.exit === 0))
+  assert.ok(events.every((e) => e.taskId.startsWith(`${REPO}#7@`) && e.actor.type === "system"))
+  assert.equal(JSON.stringify(events).includes(TOKEN), false)
+})
+
+test("events: a broken emit never changes the outcome", async () => {
+  const s = setup()
+  assert.equal(await s.run({ emit: () => { throw new Error("sink down") } }), "review")
+})
+
+test("events: a failing check is reported with its exit code before the hand-back", async () => {
+  const s = setup({ checks: ["false"] })
+  const events = []
+  assert.equal(await s.run({ emit: (e) => events.push(e) }), "needs-attention")
+  assert.ok(events.some((e) => e.type === "step.result" && e.data.kind === "checks" && e.data.exit !== 0))
+  assert.ok(events.some((e) => e.type === "task.state" && e.data.status === "needs_input_or_failed"))
+})
