@@ -5,6 +5,9 @@
 // the registry says a probe verified it. Wired into the pipeline in shadow mode
 // only (factory.orchestration.enabled): decisions are recorded, never applied.
 
+import { can } from "./policy.mjs"
+import { validateTask } from "./contracts.mjs"
+
 export const TIERS = ["economical", "balanced", "powerful", "advanced"]
 export const MAX_ESCALATIONS_PER_TASK = 2
 
@@ -56,4 +59,43 @@ export function escalate({ tier, escalations = 0, budgetAllows = false }) {
   const next = TIERS[TIERS.indexOf(tier) + 1]
   if (!next) return { ok: false, reason: "already at the top tier", handTo: "human" }
   return { ok: true, tier: next, escalations: escalations + 1 }
+}
+
+// --- the task-write path for a model (docs/architecture/15 §1) ---------------
+// The one place a task's assignedModel/assignedProvider is written. M-1/M-2:
+// only the Main Agent or a factory-admin override may write it (403 otherwise).
+// M-3: only before execution starts. M-4: every write returns the event to
+// append. A model is assignable only if the registry lists it as verified in
+// the given tier; budget checks apply to an override too.
+const BEFORE_EXECUTION = ["queued", "claimed", "preparing"]
+
+const refuse = (status, error) => ({ ok: false, status, error })
+
+export function assignModel(task, { actor, provider, model, tier, reason, registry, budgetRemaining } = {}) {
+  if (!can(actor, "agent.assign_model")) return refuse(403, `${actor?.type ?? "unknown"} actors cannot assign models`)
+  if (actor.type === "human" && !(typeof actor.id === "string" && actor.id.trim())) return refuse(403, "an admin override needs the admin's id")
+  if (typeof reason !== "string" || !reason.trim()) return refuse(422, "a model assignment needs a reason")
+  if (!BEFORE_EXECUTION.includes(task?.status)) return refuse(409, `the model is fixed once the task is ${task?.status ?? "unknown"}`)
+  const budget = budgetRemaining
+  if (!budget || !Number.isFinite(budget.minutes) || !Number.isInteger(budget.attempts)) return refuse(422, "budgetRemaining { minutes, attempts } is required")
+  if (budget.minutes <= 0 || budget.attempts <= 0) return refuse(409, "the task has no budget left")
+  if (!TIERS.includes(tier)) return refuse(422, `unknown tier "${tier}"`)
+  const entry = (registry?.tiers?.[tier] ?? []).find((e) => e?.provider === provider && e?.model === model)
+  if (!entry) return refuse(422, `${provider}:${model} is not registered in tier ${tier}`)
+  if (entry.status !== "verified") return refuse(422, `${provider}:${model} is not verified (status ${entry.status})`)
+
+  const from = task.assignedModel ? `${task.provider}:${task.assignedModel}` : null
+  const to = `${provider}:${model}`
+  const updated = { ...task, provider, assignedModel: model }
+  const { ok, errors } = validateTask(updated)
+  if (!ok) return refuse(422, `the task would be invalid: ${errors.join("; ")}`)
+  const decidedBy = actor.type === "human" ? `user:${actor.id}` : "main-agent"
+  const event = {
+    type: from ? "model.change" : "model.assign",
+    taskId: task.taskId,
+    project: task.project,
+    actor: actor.type === "human" ? { type: "human", role: actor.role, id: actor.id } : { type: actor.type },
+    data: { task: task.taskId, agent: task.assignedAgent, from, to, reason: reason.trim(), tier, decided_by: decidedBy, budget_remaining: { minutes: budget.minutes, attempts: budget.attempts } },
+  }
+  return { ok: true, task: updated, event }
 }
