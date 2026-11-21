@@ -338,7 +338,7 @@ export async function runIssue({ config, repoName, issueNumber, runId, runUrl, e
     // once per run, only if a whole agent round and the checks still fit the budget.
     if (!checks.passed && !continuing && assignedModel && result.code === 0) {
       const elapsed = (clock() - startedAt) / 60000
-      const step = escalate({ tier: assignedTier, budgetAllows: elapsed + timeoutMinutes + 2 * stepMinutes <= runBudgetMinutes(config) })
+      const step = escalate({ tier: assignedTier, budgetAllows: elapsed + timeoutMinutes + stepMinutes <= runBudgetMinutes(config) })
       const next = step.ok ? resolveModel(config.factory.orchestration.registry, step.tier, { provider: worker.agent }) : null
       if (next?.ok && next.model !== assignedModel) {
         console.log(`Check still failing: ${checks.command}. Escalating from ${assignedModel} to ${next.model} (${step.tier}).`)
@@ -355,6 +355,7 @@ ${checks.output.slice(-3000)}
         await signIn(box, config, worker.agent)
         result = await runAgent(box, config, worker.agent, { workDir: repoDir, jobDir, prompt: buildPrompt(repo, issue, comments, extra), timeoutMinutes, model: assignedModel })
         await endAgentSession(box, config)
+        info.agentMinutes = (info.agentMinutes ?? 0) + Number(result.minutes)
         recordProviderError(result)
         checks = result.code === 0 ? await runCommands(box, "checks", repoDir, jobDir, repo.checks, stepMinutes) : checks
       }
