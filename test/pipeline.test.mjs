@@ -781,6 +781,33 @@ test("breaker: a transient provider error counts, and a success closes it again"
   assert.equal(closed.claude.failures, 0)
 })
 
+// The fake agent writes the model it was given into model.txt; the check passes only for sonnet.
+const escalating = (apply) => ({
+  checks: ["grep -q sonnet model.txt"],
+  configure: (c) => {
+    c.factory.orchestration = { enabled: true, apply, registry: { tiers: { economical: [{ provider: "claude", model: "haiku", status: "verified" }], balanced: [{ provider: "claude", model: "sonnet", status: "verified" }] } } }
+    c.agents.claude.command = `printf '%s\n' {model} > model.txt; : {prompt}; echo "Tried." > {summary}`
+  },
+})
+
+test("escalation: checks that fail on the first try and the fix round get one tier step up", async () => {
+  const s = setup(escalating(true))
+  const events = []
+  assert.equal(await s.run({ emit: (e) => events.push(e) }), "review")
+  const change = events.find((e) => e.type === "model.change")
+  assert.ok(change, "a model.change event")
+  assert.deepEqual([change.data.from, change.data.to, change.data.tier, change.data.decided_by], ["haiku", "sonnet", "balanced", "main-agent"])
+  assert.match(change.data.reason, /checks failed twice/)
+  assert.equal(typeof change.data.budget_remaining.minutes, "number")
+})
+
+test("escalation: without an applied model there is none, and the run hands the issue back", async () => {
+  const s = setup(escalating(false))
+  const events = []
+  assert.equal(await s.run({ emit: (e) => events.push(e) }), "needs-attention")
+  assert.equal(events.some((e) => e.type === "model.change"), false)
+})
+
 test("events: the committed registry gives a shadow pick of a verified model", async () => {
   const s = setup()
   const events = []
