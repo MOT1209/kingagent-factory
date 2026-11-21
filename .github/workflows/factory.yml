@@ -74,6 +74,15 @@ jobs:
         run: node src/plan.mjs
       # Set the repo variable FACTORY_DRY_RUN to true to stop after the plan. Useful
       # while proving the trigger, before any agent is allowed to run.
+      # The provider circuit breakers of earlier runs (src/core/breaker-store.mjs),
+      # the newest cached copy. Counts and times only, no secret values.
+      - name: Restore the provider breakers
+        if: vars.FACTORY_DRY_RUN != 'true'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/factory-breakers.json
+          key: factory-breakers-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: factory-breakers-
       - name: Do the work and open a pull request
         if: vars.FACTORY_DRY_RUN != 'true'
         timeout-minutes: 165
@@ -90,7 +99,15 @@ jobs:
           FACTORY_RUN_RECORD: ${{ runner.temp }}/factory-run.json
           # One JSON event per line (src/core/events.mjs). No secret values.
           FACTORY_EVENTS: ${{ runner.temp }}/factory-events.jsonl
+          # Read and updated by src/run.mjs, then cached for the next run.
+          FACTORY_BREAKERS: ${{ runner.temp }}/factory-breakers.json
         run: node src/run.mjs
+      - name: Keep the provider breakers
+        if: always() && vars.FACTORY_DRY_RUN != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/factory-breakers.json
+          key: factory-breakers-${{ github.run_id }}-${{ github.run_attempt }}
       # The record of this run, kept for 90 days. No secret values are in it.
       - name: Keep the run record
         if: always() && vars.FACTORY_DRY_RUN != 'true'

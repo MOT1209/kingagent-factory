@@ -9,6 +9,7 @@ import { secretValues } from "./agents.mjs"
 import { makeRedactor } from "./guards.mjs"
 import { runIssue } from "./pipeline.mjs"
 import { makeEvent, appendEvent } from "./core/events.mjs"
+import { loadBreakers, saveBreakers } from "./core/breaker-store.mjs"
 import { summaryMarkdown, statsRecord, runRecord, writeRunRecord, writeJobSummary } from "./report.mjs"
 
 const [repoName = process.env.FACTORY_REPO, issueNumber = process.env.FACTORY_ISSUE] = process.argv.slice(2)
@@ -26,6 +27,8 @@ try {
   redact = makeRedactor(secretValues(config))
   const info = {}
   const startedAt = Date.now()
+  // Provider circuit breakers carried between runs (factory.yml caches the file).
+  const breakers = loadBreakers(process.env.FACTORY_BREAKERS)
   const once = (extra = {}) =>
     runIssue({
       config,
@@ -43,6 +46,7 @@ try {
       info,
       emit: (event) => appendEvent(makeEvent({ ...event, runId, factory: config.factory.repo }, { redact })),
       startedAt,
+      breakers,
       ...extra,
     })
   let outcome = await once()
@@ -52,6 +56,11 @@ try {
   const repoShown = findRepoName(config, repoName)
   writeJobSummary(summaryMarkdown({ outcome, repo: repoShown, issue: issueNumber, runUrl, info }))
   console.log(`::notice title=factory-stats::${JSON.stringify(statsRecord({ outcome, repo: repoShown, issue: issueNumber, runId, info }))}`)
+  try {
+    saveBreakers(process.env.FACTORY_BREAKERS, breakers)
+  } catch (error) {
+    console.log(`Could not save the provider breakers: ${redact(error.message)}`)
+  }
   writeRunRecord(runRecord({ outcome, repo: repoShown, issue: issueNumber, runId, runUrl, info }))
   console.log(`\nOutcome: ${outcome}`)
   // An issue handed back to a person, or never started, is not a success.
