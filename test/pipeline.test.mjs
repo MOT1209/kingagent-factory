@@ -726,6 +726,24 @@ test("events: a provider error in the check-repair attempt is recorded too", asy
   assert.deepEqual(events.filter((e) => e.type === "provider.error").map((e) => [e.data.kind, e.data.transient]), [["auth", false]])
 })
 
+test("events: with apply on, the run renders the tier's verified model of the worker's agent into its command", async () => {
+  const tiers = { economical: [{ provider: "opencode", model: "opencode/free", status: "verified" }, { provider: "claude", model: "probing", status: "probing" }, { provider: "claude", model: "haiku", status: "verified" }] }
+  const s = setup({ configure: (c) => (c.factory.orchestration = { enabled: true, apply: true, registry: { tiers } }) })
+  const events = []
+  assert.equal(await s.run({ emit: (e) => events.push(e) }), "review")
+  const applied = events.filter((e) => e.type === "model.assign" && e.data.shadow === false)
+  assert.deepEqual(applied.map((e) => [e.data.provider, e.data.model]), [["claude", "haiku"]])
+  assert.ok(s.box.commands.some((c) => c.includes("--model 'haiku'")), "the agent command carries the model")
+})
+
+test("events: with apply off, the command has no model flag", async () => {
+  const s = setup({ configure: (c) => (c.factory.orchestration = { enabled: true, apply: false, registry: { tiers: { economical: [{ provider: "claude", model: "haiku", status: "verified" }] } } }) })
+  const events = []
+  assert.equal(await s.run({ emit: (e) => events.push(e) }), "review")
+  assert.equal(events.some((e) => e.type === "model.assign" && e.data.shadow === false), false)
+  assert.ok(!s.box.commands.some((c) => c.includes("--model")))
+})
+
 test("events: the committed registry gives a shadow pick of a verified model", async () => {
   const s = setup()
   const events = []

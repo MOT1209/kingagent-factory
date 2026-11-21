@@ -43,10 +43,10 @@ export function classify(task, facts = {}) {
 
 // registry.tiers[tier] is an ordered list of entries { provider, model, status }.
 // The first verified entry wins; an unverified model is never assigned.
-export function resolveModel(registry, tier, { skip = [] } = {}) {
+export function resolveModel(registry, tier, { skip = [], provider } = {}) {
   if (!TIERS.includes(tier)) return { ok: false, reason: `unknown tier "${tier}"` }
   const entries = registry?.tiers?.[tier] ?? []
-  const usable = entries.find((e) => e && e.status === "verified" && e.provider && e.model && !skip.includes(`${e.provider}:${e.model}`))
+  const usable = entries.find((e) => e && e.status === "verified" && e.provider && e.model && !skip.includes(`${e.provider}:${e.model}`) && (provider === undefined || e.provider === provider))
   if (usable) return { ok: true, provider: usable.provider, model: usable.model, tier }
   return { ok: false, reason: entries.length ? `no verified model in tier ${tier}` : `no models registered for tier ${tier}` }
 }

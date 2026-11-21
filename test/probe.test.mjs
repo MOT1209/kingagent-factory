@@ -1,6 +1,8 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { ADAPTERS, verdict, modelMatches, SAFE_MODEL } from "../src/core/probe.mjs"
+import { withModel } from "../src/agents.mjs"
+import { resolveModel } from "../src/core/router.mjs"
 
 // Shapes as the CLIs printed them in the 2026-11-21 probe (values shortened).
 const claudeReport = (model, result = "PROBE OK") => JSON.stringify({ type: "result", result, modelUsage: { [model]: { inputTokens: 3, outputTokens: 5 } } })
@@ -51,4 +53,21 @@ test("verdict: verified only when the round-trip passed and the CLI names the re
 test("model ids are plain: nothing that could break out of the quoted command", () => {
   for (const id of ["haiku", "opencode/big-pickle", "claude-sonnet-5-5", "a.b:c@d"]) assert.ok(SAFE_MODEL.test(id), id)
   for (const id of ["x'; rm -rf ~", "a b", "$(id)", "`id`", "", "x".repeat(101)]) assert.ok(!SAFE_MODEL.test(id), id)
+})
+
+test("withModel puts the flag and the quoted model right after the binary, and refuses what it cannot render", () => {
+  const agent = { command: 'claude -p "$(cat {prompt})" > {summary}', modelFlag: "--model" }
+  assert.equal(withModel(agent), agent.command)
+  assert.equal(withModel(agent, "sonnet"), `claude --model 'sonnet' -p "$(cat {prompt})" > {summary}`)
+  const opencode = { command: 'opencode run {model} "$(cat {prompt})"', modelFlag: "-m" }
+  assert.equal(withModel(opencode, "opencode/big-pickle"), `opencode run -m 'opencode/big-pickle' "$(cat {prompt})"`)
+  assert.equal(withModel(opencode), 'opencode run "$(cat {prompt})"')
+  assert.throws(() => withModel({ command: "claude" }, "sonnet"), /no modelFlag/)
+  assert.throws(() => withModel(agent, "x'; id"), /not a model id/)
+})
+
+test("resolveModel can be limited to one provider", () => {
+  const registry = { tiers: { balanced: [{ provider: "claude", model: "sonnet", status: "verified" }, { provider: "opencode", model: "opencode/x", status: "verified" }] } }
+  assert.equal(resolveModel(registry, "balanced", { provider: "opencode" }).model, "opencode/x")
+  assert.equal(resolveModel(registry, "balanced", { provider: "codex" }).ok, false)
 })
