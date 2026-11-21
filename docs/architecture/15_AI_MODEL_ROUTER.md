@@ -51,6 +51,12 @@ Per task: minutes (exists, `report.mjs`), attempts, escalation count, provider, 
 ## 6. Verification before assignment (first Phase 05 task)
 Extend `scripts/smoke-test.mjs` (which already creates a Box and asks the agent for "BOX OK") into a **capability probe** per provider/model: CLI version, accepted model flag, a trivial task round-trip, summary-file behaviour, reported usage fields, failure-class samples. Output: registry entries with `verified_at`. Re-probed on a schedule and after image rebuilds.
 
+**Result (2026-11-21, R-36 resolved).** `node --env-file=.env scripts/probe-models.mjs <claude|opencode> --model <id> ... --yes` creates one Box like the smoke test, asks each model for `PROBE OK`, and marks a model `verified` only when the CLI's own report names the requested model as the one that answered:
+- Claude Code 2.1.293: `--model`; `--output-format json` reports `modelUsage`. `haiku` → `claude-haiku-5-5`, `sonnet` → `claude-sonnet-5-5`, `opus` → `claude-opus-5-5`.
+- OpenCode 1.18.29: `-m provider/model`; `run --format json` omits the model, so the probe reads `opencode export <session>` and trusts only the assistant messages' `providerID/modelID` (the user message carries the request). `opencode/big-pickle`, `opencode/deepseek-v4.1-flash-free`.
+
+The entries live in `factory.config.json` under `factory.orchestration.registry` (with `verified_at`, `cli_version`). `factory.orchestration.enabled: true` turns on **shadow** routing only: a `model.assign` event with `shadow: true`; the run still uses the worker's agent and its default model. The pure rules are in `src/core/probe.mjs`.
+
 ## 7. Model performance evaluation
 Replays on the frozen task suite (08 §5) and live metrics: first-try check-pass rate, minutes per accepted change, human-edit rate, escalation rate, per tier/model. Router weights change only through the improvement pipeline with human approval (08) — never automatically.
 

@@ -178,7 +178,14 @@ export async function createAgentBox(config, agentName, name, labels) {
   const options = boxOptions(config, name, labels)
   const snapshotId = imageFor(config, agentName)
   const box = snapshotId ? await Box.fromSnapshot(snapshotId, options) : await Box.create(options)
-  await applyBoxSettings(box, config, agentName)
+  // The caller gets no handle if this fails, so the Box it would never see is
+  // deleted here rather than left holding a Box slot. The settings error wins.
+  try {
+    await applyBoxSettings(box, config, agentName)
+  } catch (error) {
+    await box.delete().catch(() => {})
+    throw error
+  }
   return box
 }
 
