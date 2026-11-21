@@ -93,3 +93,21 @@ test("breaker: is pure and rejects bad options", () => {
   assert.throws(() => createBreaker({ threshold: 0 }), /threshold/)
   assert.throws(() => createBreaker({ cooldownMs: -1 }), /cooldownMs/)
 })
+
+test("breaker store: round-trips through a file, drops damaged entries, and a missing file means closed", async () => {
+  const { mkdtempSync } = await import("node:fs")
+  const { tmpdir } = await import("node:os")
+  const { join } = await import("node:path")
+  const { loadBreakers, saveBreakers, parseBreakers, breakerFor } = await import("../src/core/breaker-store.mjs")
+  const file = join(mkdtempSync(join(tmpdir(), "kaf-breakers-")), "b.json")
+  assert.deepEqual(loadBreakers(file), {})
+  assert.deepEqual(loadBreakers(undefined), {})
+  assert.deepEqual(loadBreakers(tmpdir()), {}, "an unreadable path (a directory) is closed, not an error")
+  const b = { threshold: 3, cooldownMs: 1000, failures: 2, openedAt: null, lastKind: "quota" }
+  saveBreakers(file, { claude: b })
+  assert.deepEqual(loadBreakers(file), { claude: b })
+  assert.deepEqual(parseBreakers("not json"), {})
+  assert.deepEqual(parseBreakers("[]"), {})
+  assert.deepEqual(parseBreakers(JSON.stringify({ claude: { ...b, failures: -1 }, "Bad Name": b, opencode: b })), { opencode: b })
+  assert.equal(breakerFor({}, "claude").failures, 0)
+})

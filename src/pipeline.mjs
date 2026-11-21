@@ -14,7 +14,8 @@ import { buildPrBody } from "./pr-body.mjs"
 import * as gitHost from "./git-host.mjs"
 import { planSingleTask } from "./core/planner.mjs"
 import { classify, resolveModel } from "./core/router.mjs"
-import { classifyProviderError } from "./core/providers.mjs"
+import { classifyProviderError, isAvailable, recordFailure, recordSuccess } from "./core/providers.mjs"
+import { breakerFor } from "./core/breaker-store.mjs"
 
 const NEEDS_CLARIFICATION = "NEEDS_CLARIFICATION:"
 const NEEDS_SPLIT = "NEEDS_SPLIT:"
@@ -73,7 +74,7 @@ async function runCommands(box, kind, repoDir, jobDir, commands, timeoutMinutes)
 // provider (a usage limit, an overloaded service) while a whole second pass still
 // fits the run budget and another agent type has a worker: the worker is released
 // and the caller runs again with `continuing` and the agents in `excludeAgents`.
-export async function runIssue({ config, repoName, issueNumber, runId, runUrl, eventName, actor, token, redact, api, claimWorker, releaseWorker, git = gitHost, info = {}, emit = () => {}, continuing = false, excludeAgents = [], startedAt = Date.now(), clock = Date.now, sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)) }) {
+export async function runIssue({ config, repoName, issueNumber, runId, runUrl, eventName, actor, token, redact, api, claimWorker, releaseWorker, git = gitHost, info = {}, emit = () => {}, continuing = false, excludeAgents = [], breakers = {}, startedAt = Date.now(), clock = Date.now, sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)) }) {
   const labels = config.labels
   const state = transitions(labels)
   const repo = findRepo(config, repoName)
@@ -164,7 +165,17 @@ export async function runIssue({ config, repoName, issueNumber, runId, runUrl, e
     return needsAttention(`The label \`agent:${forced}\` asks for an agent type that has no enabled worker. Remove or change that label, then add \`${labels.ready}\` again.`)
   }
 
-  const claim = await claimWorker(config, issueLabels, runId, { excludeAgents, ...(continuing && { waitMinutes: secondPassWait(config) }) })
+  // A provider whose breaker is open (several transient errors in a row, across
+  // runs) is avoided while a worker of another agent type exists. An agent:<name>
+  // label still gets the agent it asks for.
+  const types = [...new Set(config.workers.filter((w) => w.enabled).map((w) => w.agent))].filter((a) => !excludeAgents.includes(a))
+  const open = forced ? [] : types.filter((a) => !isAvailable(breakerFor(breakers, a), clock()))
+  const avoid = open.length < types.length ? open : []
+  if (avoid.length) {
+    console.log(`The provider of ${avoid.join(", ")} failed repeatedly (circuit breaker open); preferring another agent type.`)
+    emitEvent("provider.error", { breaker: "open", avoided: avoid })
+  }
+  const claim = await claimWorker(config, issueLabels, runId, { excludeAgents: [...excludeAgents, ...avoid], ...(continuing && { waitMinutes: secondPassWait(config) }) })
   if (!claim && continuing) {
     // The first attempt already moved the issue to running, so it must not stay there.
     return needsAttention(`The ${excludeAgents.join(", ")} agent hit a provider limit and no worker of another agent type became free in time. Add \`${labels.ready}\` again to retry.${runLink}`)
@@ -272,15 +283,17 @@ export async function runIssue({ config, repoName, issueNumber, runId, runUrl, e
 
     // A typed provider error (docs/architecture/15 §4) of a failed agent attempt
     // is recorded whether or not it leads to a fallback; the sink masks it.
+    // It also moves the provider's circuit breaker, which the next runs read.
     const recordProviderError = (attempt) => {
-      if (attempt.code === 0) return null
+      if (attempt.code === 0) return ((breakers[worker.agent] = recordSuccess(breakerFor(breakers, worker.agent))), null)
       const error = classifyProviderError([attempt.summary, attempt.log].join("\n"))
+      if (error) breakers[worker.agent] = recordFailure(breakerFor(breakers, worker.agent), error, clock())
       if (error) emitEvent("provider.error", { agent: worker.agent, kind: error.kind, transient: error.transient, match: error.match.slice(0, 200) })
       return error
     }
 
+    const providerError = recordProviderError(result)
     if (result.code !== 0) {
-      const providerError = recordProviderError(result)
       // The provider, not the task: try another agent type, once, if a whole
       // second pass still fits the run budget. An issue that asks for one
       // agent type with a label keeps asking for it.

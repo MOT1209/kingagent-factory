@@ -754,6 +754,33 @@ test("events: with apply off, the command has no model flag", async () => {
   assert.ok(scripts.length && !scripts.some((c) => c.includes("--model")))
 })
 
+const openBreaker = () => ({ threshold: 3, cooldownMs: 3600000, failures: 3, openedAt: Date.now(), lastKind: "quota" })
+
+test("breaker: an open provider breaker sends the run to a worker of another agent type", async () => {
+  const s = setup({ second: true })
+  const events = []
+  assert.equal(await s.run({ emit: (e) => events.push(e), breakers: { claude: openBreaker() } }), "review")
+  assert.equal(events.find((e) => e.type === "task.state" && e.data.status === "running").data.agent, "opencode")
+  assert.deepEqual(events.find((e) => e.type === "provider.error" && e.data.breaker).data, { breaker: "open", avoided: ["claude"] })
+})
+
+test("breaker: with no other agent type the open provider is still used", async () => {
+  const s = setup()
+  assert.equal(await s.run({ breakers: { claude: openBreaker() } }), "review")
+})
+
+test("breaker: a transient provider error counts, and a success closes it again", async () => {
+  const failing = setup({ agent: LIMIT })
+  const breakers = {}
+  assert.equal(await failing.run({ breakers }), "needs-attention")
+  assert.equal(breakers.claude.failures, 1)
+  assert.equal(breakers.claude.lastKind, "quota")
+  const ok = setup()
+  const closed = { claude: { ...openBreaker(), openedAt: null, failures: 2 } }
+  assert.equal(await ok.run({ breakers: closed }), "review")
+  assert.equal(closed.claude.failures, 0)
+})
+
 test("events: the committed registry gives a shadow pick of a verified model", async () => {
   const s = setup()
   const events = []
