@@ -62,6 +62,7 @@ test("withModel puts the flag and the quoted model right after the binary, and r
   const opencode = { command: 'opencode run {model} "$(cat {prompt})"', modelFlag: "-m" }
   assert.equal(withModel(opencode, "opencode/big-pickle"), `opencode run -m 'opencode/big-pickle' "$(cat {prompt})"`)
   assert.equal(withModel(opencode), 'opencode run "$(cat {prompt})"')
+  assert.equal(withModel({ ...agent, command: "MODE=fast A=1 claude -p x" }, "haiku"), "MODE=fast A=1 claude --model 'haiku' -p x")
   assert.throws(() => withModel({ command: "claude" }, "sonnet"), /no modelFlag/)
   assert.throws(() => withModel(agent, "x'; id"), /not a model id/)
 })

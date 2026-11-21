@@ -148,13 +148,14 @@ export async function writeJobFiles(box, config, agentName) {
 
 // The agent's command with the assigned model (docs 15 M-3: the orchestrator
 // renders it, the agent cannot). The flag goes where the command has {model}
-// (for a subcommand such as `opencode run {model}`), else right after the binary.
+// (for a subcommand such as `opencode run {model}`), else right after the binary,
+// past any leading NAME=value assignments.
 export function withModel(agent, model) {
   if (model === undefined) return agent.command.replace(/\{model\} ?/g, "")
   if (!agent.modelFlag) throw new Error("this agent has no modelFlag, so a model cannot be applied")
   if (!SAFE_MODEL.test(model)) throw new Error(`"${model}" is not a model id`)
   const flag = `${agent.modelFlag} ${q(model)}`
-  return agent.command.includes("{model}") ? agent.command.replaceAll("{model}", flag) : agent.command.replace(/^(\S+)/, `$1 ${flag}`)
+  return agent.command.includes("{model}") ? agent.command.replaceAll("{model}", flag) : agent.command.replace(/^((?:\s*[A-Za-z_][A-Za-z0-9_]*=\S*\s+)*\s*\S+)/, `$1 ${flag}`)
 }
 
 // Runs the agent with runScript, so it is in the background, in bash, and
