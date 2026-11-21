@@ -669,8 +669,8 @@ test("events: a failing check is reported with its exit code before the hand-bac
   assert.ok(events.some((e) => e.type === "task.state" && e.data.status === "needs_input_or_failed"))
 })
 
-test("events: shadow routing is off by default and records nothing", async () => {
-  const s = setup()
+test("events: shadow routing is off without the setting and records nothing", async () => {
+  const s = setup({ configure: (c) => delete c.factory.orchestration })
   const events = []
   assert.equal(await s.run({ emit: (e) => events.push(e) }), "review")
   assert.equal(events.some((e) => e.type === "model.assign"), false)
@@ -724,4 +724,13 @@ test("events: a provider error in the check-repair attempt is recorded too", asy
   const events = []
   assert.equal(await s.run({ emit: (e) => events.push(e) }), "needs-attention")
   assert.deepEqual(events.filter((e) => e.type === "provider.error").map((e) => [e.data.kind, e.data.transient]), [["auth", false]])
+})
+
+test("events: the committed registry gives a shadow pick of a verified model", async () => {
+  const s = setup()
+  const events = []
+  assert.equal(await s.run({ emit: (e) => events.push(e) }), "review")
+  const pick = events.find((e) => e.type === "model.assign").data
+  assert.equal(pick.shadow, true)
+  assert.ok(pick.provider && pick.model, JSON.stringify(pick))
 })

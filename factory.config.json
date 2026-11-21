@@ -18,7 +18,28 @@
     "agentLabelSettleSeconds": 8,
     "agentTimeoutMinutes": 30,
     "commandTimeoutMinutes": 25,
-    "snapshotId": "ab599155-38c6-41c2-a904-d393bcba198e"
+    "snapshotId": "ab599155-38c6-41c2-a904-d393bcba198e",
+    "orchestration": {
+      "enabled": true,
+      "registry": {
+        "tiers": {
+          "economical": [
+            { "provider": "opencode", "model": "opencode/big-pickle", "status": "verified", "verified_at": "2026-11-21T10:08:02Z", "cli_version": "1.18.29" },
+            { "provider": "opencode", "model": "opencode/deepseek-v4.1-flash-free", "status": "verified", "verified_at": "2026-11-21T10:08:16Z", "cli_version": "1.18.29" },
+            { "provider": "claude", "model": "haiku", "status": "verified", "verified_at": "2026-11-21T10:02:13Z", "cli_version": "2.1.293" }
+          ],
+          "balanced": [
+            { "provider": "claude", "model": "sonnet", "status": "verified", "verified_at": "2026-11-21T10:02:28Z", "cli_version": "2.1.293" }
+          ],
+          "powerful": [
+            { "provider": "claude", "model": "opus", "status": "verified", "verified_at": "2026-11-21T10:02:43Z", "cli_version": "2.1.293" }
+          ],
+          "advanced": [
+            { "provider": "claude", "model": "opus", "status": "verified", "verified_at": "2026-11-21T10:02:43Z", "cli_version": "2.1.293" }
+          ]
+        }
+      }
+    }
   },
   "labels": {
     "ready": "ready",
