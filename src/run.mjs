@@ -49,18 +49,23 @@ try {
       breakers,
       ...extra,
     })
-  let outcome = await once()
-  // The agent's provider reported a limit and a second pass still fits the run
-  // budget: once more, on a worker of another agent type.
-  if (outcome === "retry-elsewhere") outcome = await once({ continuing: true, excludeAgents: info.excludeAgents })
+  let outcome
+  try {
+    outcome = await once()
+    // The agent's provider reported a limit and a second pass still fits the run
+    // budget: once more, on a worker of another agent type.
+    if (outcome === "retry-elsewhere") outcome = await once({ continuing: true, excludeAgents: info.excludeAgents })
+  } finally {
+    // Saved even when an attempt throws, so a recorded provider failure is kept.
+    try {
+      saveBreakers(process.env.FACTORY_BREAKERS, breakers)
+    } catch (error) {
+      console.log(`Could not save the provider breakers: ${redact(error.message)}`)
+    }
+  }
   const repoShown = findRepoName(config, repoName)
   writeJobSummary(summaryMarkdown({ outcome, repo: repoShown, issue: issueNumber, runUrl, info }))
   console.log(`::notice title=factory-stats::${JSON.stringify(statsRecord({ outcome, repo: repoShown, issue: issueNumber, runId, info }))}`)
-  try {
-    saveBreakers(process.env.FACTORY_BREAKERS, breakers)
-  } catch (error) {
-    console.log(`Could not save the provider breakers: ${redact(error.message)}`)
-  }
   writeRunRecord(runRecord({ outcome, repo: repoShown, issue: issueNumber, runId, runUrl, info }))
   console.log(`\nOutcome: ${outcome}`)
   // An issue handed back to a person, or never started, is not a success.

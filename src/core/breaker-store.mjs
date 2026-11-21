@@ -22,7 +22,14 @@ export function parseBreakers(text) {
   return Object.fromEntries(Object.entries(raw).filter(([agent, b]) => /^[a-z0-9-]{1,14}$/.test(agent) && isBreaker(b)).map(([agent, b]) => [agent, { threshold: b.threshold, cooldownMs: b.cooldownMs, failures: b.failures, openedAt: b.openedAt, lastKind: typeof b.lastKind === "string" ? b.lastKind : null }]))
 }
 
-export const loadBreakers = (file) => (file && existsSync(file) ? parseBreakers(readFileSync(file, "utf8")) : {})
+export function loadBreakers(file) {
+  if (!file || !existsSync(file)) return {}
+  try {
+    return parseBreakers(readFileSync(file, "utf8"))
+  } catch {
+    return {}
+  }
+}
 
 export function saveBreakers(file, breakers) {
   if (file) writeFileSync(file, `${JSON.stringify(breakers, null, 2)}\n`)

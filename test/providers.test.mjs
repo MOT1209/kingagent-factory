@@ -102,6 +102,7 @@ test("breaker store: round-trips through a file, drops damaged entries, and a mi
   const file = join(mkdtempSync(join(tmpdir(), "kaf-breakers-")), "b.json")
   assert.deepEqual(loadBreakers(file), {})
   assert.deepEqual(loadBreakers(undefined), {})
+  assert.deepEqual(loadBreakers(tmpdir()), {}, "an unreadable path (a directory) is closed, not an error")
   const b = { threshold: 3, cooldownMs: 1000, failures: 2, openedAt: null, lastKind: "quota" }
   saveBreakers(file, { claude: b })
   assert.deepEqual(loadBreakers(file), { claude: b })
