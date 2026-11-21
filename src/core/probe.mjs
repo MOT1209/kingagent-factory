@@ -55,7 +55,8 @@ export const modelMatches = (requested, used) => used === requested || used.spli
 export function verdict({ requested, code, reply = "", modelsUsed = [], error }) {
   if (error) return { status: "failed", reason: error }
   if (code !== 0) return { status: "failed", reason: `exit code ${code}` }
-  if (!reply.includes("PROBE OK")) return { status: "failed", reason: "the reply did not contain PROBE OK" }
+  // Exactly the reply asked for: a refusal that quotes "PROBE OK" must not pass.
+  if (reply.trim() !== "PROBE OK") return { status: "failed", reason: "the reply was not exactly PROBE OK" }
   if (!modelsUsed.length) return { status: "failed", reason: "the CLI did not report which model it used" }
   if (!modelsUsed.some((m) => modelMatches(requested, m))) return { status: "failed", reason: `asked for ${requested}, the CLI reports ${modelsUsed.join(", ")}` }
   return { status: "verified" }

@@ -40,7 +40,9 @@ test("verdict: verified only when the round-trip passed and the CLI names the re
   const ok = { requested: "sonnet", code: 0, reply: "PROBE OK", modelsUsed: ["claude-sonnet-5-5"] }
   assert.deepEqual(verdict(ok), { status: "verified" })
   assert.match(verdict({ ...ok, code: 1 }).reason, /exit code 1/)
-  assert.match(verdict({ ...ok, reply: "hello" }).reason, /PROBE OK/)
+  assert.match(verdict({ ...ok, reply: "hello" }).reason, /not exactly PROBE OK/)
+  assert.equal(verdict({ ...ok, reply: "I cannot comply with PROBE OK" }).status, "failed")
+  assert.equal(verdict({ ...ok, reply: "  PROBE OK\n" }).status, "verified")
   assert.match(verdict({ ...ok, modelsUsed: [] }).reason, /did not report/)
   assert.match(verdict({ ...ok, modelsUsed: ["claude-haiku-5-5"] }).reason, /asked for sonnet, the CLI reports claude-haiku-5-5/)
   assert.match(verdict({ ...ok, error: "the CLI help does not list --model" }).reason, /--model/)
