@@ -15,9 +15,10 @@ function orchestrationErrors(orchestration) {
   if (!isPlainObject(orchestration)) return ["factory.orchestration must be an object"]
   const errors = []
   for (const key of Object.keys(orchestration)) {
-    if (!["enabled", "registry"].includes(key)) errors.push(`factory.orchestration.${key} is not a known setting (use enabled or registry)`)
+    if (!["enabled", "apply", "registry"].includes(key)) errors.push(`factory.orchestration.${key} is not a known setting (use enabled, apply or registry)`)
   }
   if (orchestration.enabled !== undefined && typeof orchestration.enabled !== "boolean") errors.push("factory.orchestration.enabled must be true or false")
+  if (orchestration.apply !== undefined && typeof orchestration.apply !== "boolean") errors.push("factory.orchestration.apply must be true or false")
   const registry = orchestration.registry
   if (registry === undefined) return errors
   if (!isPlainObject(registry) || !isPlainObject(registry.tiers)) return [...errors, "factory.orchestration.registry must be an object with a tiers object"]
@@ -106,6 +107,7 @@ export function loadConfig(file = CONFIG_FILE) {
   for (const [name, agent] of Object.entries(config.agents)) {
     // Box labels are at most 20 characters, and each Box gets "agent-<name>".
     if (!/^[a-z0-9-]{1,14}$/.test(name)) errors.push(`agent name "${name}" must be 1-14 lowercase letters, digits or dashes`)
+    if (agent.modelFlag !== undefined && !(typeof agent.modelFlag === "string" && /^--?[a-z][a-z-]*$/.test(agent.modelFlag))) errors.push(`agents.${name}.modelFlag must be a flag such as --model or -m`)
 
     // "ask" is how the template ships. It loads, so the setup stages can run,
     // but nothing that creates a Box or a snapshot accepts it (see box.mjs).

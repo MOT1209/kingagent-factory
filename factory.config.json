@@ -21,6 +21,7 @@
     "snapshotId": "ab599155-38c6-41c2-a904-d393bcba198e",
     "orchestration": {
       "enabled": true,
+      "apply": false,
       "registry": {
         "tiers": {
           "economical": [
@@ -57,6 +58,7 @@
         }
       ],
       "boxSettings": [],
+      "modelFlag": "--model",
       "command": "claude -p \"$(cat {prompt})\" --dangerously-skip-permissions --output-format text > {summary}"
     },
     "opencode": {
@@ -79,7 +81,8 @@
         }
       ],
       "promptExtra": "When you are done, write your summary to the file {summary}, and nothing else to that file.",
-      "command": "opencode run \"$(cat {prompt})\""
+      "modelFlag": "-m",
+      "command": "opencode run {model} \"$(cat {prompt})\""
     }
   },
   "repos": [

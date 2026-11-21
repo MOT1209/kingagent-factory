@@ -10,9 +10,13 @@
 //              read fresh each time, so editing them needs no image rebuild.
 //   "command": the shell command. {prompt} is a file with the task, {summary}
 //              is the file the agent's final reply must end up in.
+//   "modelFlag": the flag that picks the model, such as --model. Only with it
+//              can the router's model be applied (factory.orchestration.apply).
+//              It goes where the command has {model}, else after the binary.
 import { existsSync, readFileSync } from "node:fs"
 import { homedir } from "node:os"
 import { q, sh, runScript } from "./box.mjs"
+import { SAFE_MODEL } from "./core/probe.mjs"
 
 const HOME = "/workspace/home"
 // Everything one job writes (the checkout, prompt, logs, summary, patch) lives here.
@@ -142,13 +146,25 @@ export async function writeJobFiles(box, config, agentName) {
   }
 }
 
+// The agent's command with the assigned model (docs 15 M-3: the orchestrator
+// renders it, the agent cannot). The flag goes where the command has {model}
+// (for a subcommand such as `opencode run {model}`), else right after the binary,
+// past any leading NAME=value assignments.
+export function withModel(agent, model) {
+  if (model === undefined) return agent.command.replace(/\{model\} ?/g, "")
+  if (!agent.modelFlag) throw new Error("this agent has no modelFlag, so a model cannot be applied")
+  if (!SAFE_MODEL.test(model)) throw new Error(`"${model}" is not a model id`)
+  const flag = `${agent.modelFlag} ${q(model)}`
+  return agent.command.includes("{model}") ? agent.command.replaceAll("{model}", flag) : agent.command.replace(/^((?:\s*[A-Za-z_][A-Za-z0-9_]*=\S*\s+)*\s*\S+)/, `$1 ${flag}`)
+}
+
 // Runs the agent with runScript, so it is in the background, in bash, and
 // polled. The task goes in through a file, and the agent's final reply has to
 // end up in the summary file, which becomes the pull request description.
-export async function runAgent(box, config, agentName, { workDir, jobDir, prompt, timeoutMinutes }) {
+export async function runAgent(box, config, agentName, { workDir, jobDir, prompt, timeoutMinutes, model }) {
   const promptFile = `${jobDir}/prompt.md`
   const summaryFile = `${jobDir}/summary.md`
-  const command = config.agents[agentName].command.replaceAll("{prompt}", promptFile).replaceAll("{summary}", summaryFile)
+  const command = withModel(config.agents[agentName], model).replaceAll("{prompt}", promptFile).replaceAll("{summary}", summaryFile)
 
   await sh(box, `mkdir -p ${q(jobDir)} ${q(workDir)} && rm -f ${summaryFile}`)
   // promptExtra is for agents that cannot put their reply into {summary} through

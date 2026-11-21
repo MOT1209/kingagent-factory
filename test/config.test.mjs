@@ -109,6 +109,8 @@ test("orchestration is optional, and a well-formed one loads", () => {
 test("rejects a malformed orchestration block, including unknown keys", () => {
   for (const value of [null, [], "on"]) assert.match(loadError((c) => (c.factory.orchestration = value)), /factory.orchestration must be an object/)
   assert.match(loadError((c) => (c.factory.orchestration = { enabled: "yes" })), /enabled must be true or false/)
+  assert.match(loadError((c) => (c.factory.orchestration = { apply: 1 })), /apply must be true or false/)
+  assert.match(loadError((c) => (c.agents.claude.modelFlag = "--model; rm")), /modelFlag must be a flag/)
   assert.match(loadError((c) => (c.factory.orchestration = { enable: true })), /orchestration.enable is not a known setting/)
   assert.match(loadError((c) => (c.factory.orchestration = { registry: [] })), /registry must be an object with a tiers object/)
   assert.match(loadError((c) => (c.factory.orchestration = { registry: { tiers: { cheap: [] } } })), /tiers.cheap is not a tier/)

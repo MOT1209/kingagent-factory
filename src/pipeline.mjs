@@ -180,6 +180,9 @@ export async function runIssue({ config, repoName, issueNumber, runId, runUrl, e
   info.agent = worker.agent
   info.attempts = continuing ? 2 : 1
   console.log(`Worker ${worker.id} (${worker.agent}) claimed. Box: ${worker.boxName} (${box.id})`)
+  // The model the run applies, when factory.orchestration.apply is on and the
+  // tier has a verified model of this worker's agent type. Otherwise the CLI's default.
+  let assignedModel
   try {
     const planned = planSingleTask({ config, repo, issue, runId, forcedAgent: forced ?? null })
     emitEvent("task.state", { status: "running", worker: worker.id, agent: worker.agent, idempotencyKey: planned.idempotencyKey, attempt: continuing ? 2 : 1 })
@@ -189,6 +192,13 @@ export async function runIssue({ config, repoName, issueNumber, runId, runUrl, e
       const route = classify(planned)
       const model = resolveModel(config.factory.orchestration.registry, route.tier)
       emitEvent("model.assign", { shadow: true, tier: route.tier, score: route.score, reasons: route.reasons, ...(model.ok ? { provider: model.provider, model: model.model } : { unresolved: model.reason }) })
+      if (config.factory.orchestration.apply === true && config.agents[worker.agent]?.modelFlag) {
+        const own = resolveModel(config.factory.orchestration.registry, route.tier, { provider: worker.agent })
+        if (own.ok) {
+          assignedModel = own.model
+          emitEvent("model.assign", { shadow: false, tier: route.tier, provider: own.provider, model: own.model, decided_by: "main-agent" })
+        }
+      }
     }
   } catch {}
 
@@ -255,9 +265,9 @@ export async function runIssue({ config, repoName, issueNumber, runId, runUrl, e
     // that is when the worker image decides whether a browser tool attaches to it.
     if (await startBrowser(box, config)) console.log("The Box's browser is running.")
     const timeoutMinutes = config.factory.agentTimeoutMinutes ?? 25
-    let result = await runAgent(box, config, worker.agent, { workDir: repoDir, jobDir, prompt: buildPrompt(repo, issue, comments), timeoutMinutes })
+    let result = await runAgent(box, config, worker.agent, { workDir: repoDir, jobDir, prompt: buildPrompt(repo, issue, comments), timeoutMinutes, model: assignedModel })
     await endAgentSession(box, config)
-    console.log(`Agent finished in ${result.minutes} min with exit code ${result.code}.`)
+    console.log(`Agent finished in ${result.minutes} min with exit code ${result.code}${assignedModel ? ` (model ${assignedModel})` : ""}.`)
     info.agentMinutes = (info.agentMinutes ?? 0) + Number(result.minutes)
 
     // A typed provider error (docs/architecture/15 §4) of a failed agent attempt
@@ -303,7 +313,7 @@ export async function runIssue({ config, repoName, issueNumber, runId, runUrl, e
       console.log(`Check failed: ${checks.command}. Giving the agent one chance to fix it.`)
       const extra = `\n# A check failed after your first attempt\n\nThe command \`${checks.command}\` failed with this output. Fix it.\n\n${checks.output.slice(-3000)}\n`
       await signIn(box, config, worker.agent)
-      result = await runAgent(box, config, worker.agent, { workDir: repoDir, jobDir, prompt: buildPrompt(repo, issue, comments, extra), timeoutMinutes })
+      result = await runAgent(box, config, worker.agent, { workDir: repoDir, jobDir, prompt: buildPrompt(repo, issue, comments, extra), timeoutMinutes, model: assignedModel })
       await endAgentSession(box, config)
       recordProviderError(result)
       checks = result.code === 0 ? await runCommands(box, "checks", repoDir, jobDir, repo.checks, stepMinutes) : checks
